@@ -62,7 +62,6 @@
   <div id="timer">Time: 0:00</div>
   <div id="best">Best: --</div>
   <div id="timer-controls">
-    <button id="startBtn">Start</button>
     <button id="restartBtn">Restart</button>
   </div>
 
@@ -502,6 +501,15 @@
     }
     prevThrow = throwPressed;
 
+    // --- Start the timer the moment the player first moves ---
+    // (startTimer does nothing if the timer is already running.)
+    if (
+      keys["ArrowLeft"] || keys["KeyA"] || keys["ArrowRight"] || keys["KeyD"] ||
+      keys["Space"] || keys["ArrowUp"] || keys["KeyW"]
+    ) {
+      startTimer();
+    }
+
     // --- Gravity ---
     player.vy += GRAVITY;
 
@@ -898,9 +906,8 @@
     bestEl.textContent = "Best: " + (bestMs === null ? "--" : formatTime(bestMs));
   }
 
-  // Wire the two buttons under the game. Start just starts the timer;
-  // Restart resets the ENTIRE game (back to Level 1) and the timer.
-  document.getElementById("startBtn").addEventListener("click", startTimer);
+  // Wire the Restart button — it resets the ENTIRE game (back to Level 1)
+  // and the timer. The timer itself starts as soon as the player moves.
   document.getElementById("restartBtn").addEventListener("click", restartGame);
 
   // ============================================================
