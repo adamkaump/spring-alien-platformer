@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Game Test 1</title>
+  <style>
+    /* Center the game on the page and give it a nice background. */
+    body {
+      margin: 0;
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+      color: white;
+    }
+    h1 { margin: 16px 0 8px; }
+    p  { margin: 0 0 12px; opacity: 0.7; }
+    /* The canvas is where the whole game is drawn. */
+    canvas {
+      background: #87ceeb; /* sky blue */
+      border: 4px solid #16213e;
+      border-radius: 8px;
+    }
+    /* The timer shown beneath the game. */
+    #timer {
+      margin-top: 12px;
+      font-size: 22px;
+      font-variant-numeric: tabular-nums; /* keeps digits from jiggling */
+      letter-spacing: 1px;
+    }
+    /* The best (fastest) finish time. */
+    #best {
+      margin-top: 4px;
+      font-size: 16px;
+      color: #ffd700; /* gold */
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+    }
+    /* The Start / Restart buttons under the timer. */
+    #timer-controls {
+      margin-top: 8px;
+      display: flex;
+      gap: 10px;
+    }
+    #timer-controls button {
+      font-size: 16px;
+      padding: 6px 18px;
+      border: none;
+      border-radius: 6px;
+      background: #e94560;
+      color: #fff;
+      cursor: pointer;
+    }
+    #timer-controls button:hover { background: #ff5c78; }
+  </style>
+</head>
+<body>
+  <h1>Game Test 1</h1>
+  <p>Arrow keys or A / D to move &nbsp;•&nbsp; Space or Up to jump &nbsp;•&nbsp; F to throw a bomb</p>
+  <canvas id="game" width="800" height="450"></canvas>
+  <div id="timer">Time: 0:00</div>
+  <div id="best">Best: --</div>
+  <div id="timer-controls">
+    <button id="startBtn">Start</button>
+    <button id="restartBtn">Restart</button>
+  </div>
+
+  <script>
+  // ============================================================
+  //  SETUP
+  // ============================================================
+  // Grab the canvas and its "2d context" — the thing we draw with.
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  // ============================================================
+  //  THE WORLD
+  // ============================================================
+  // Gravity pulls the player down a little more each frame.
+  const GRAVITY = 0.6;
+  // How fast the player moves left/right.
+  const MOVE_SPEED = 4;
+  // How much upward "oomph" a jump has. Bigger = higher jump.
+  const JUMP_STRENGTH = 19;
+  // How long a rickety platform wobbles before it drops (in frames).
+  const FALL_DELAY = 18;
+  // How long a moving platform pauses at each end (in frames, ~60 = 1 sec).
+  const PLATFORM_PAUSE = 60;
+
+  // The player is just a rectangle for now. x/y is its top-left corner.
+  // vx/vy are its velocity (how far it moves each frame).
+  const player = {
+    x: 100,
+    y: 100,
+    width: 32,
+    height: 48,
+    vx: 0,
+    vy: 0,
+    onGround: false,
+    color: "#e94560",
+    facing: 1, // 1 = looking right, -1 = looking left (for throwing)
+    bombs: 0,  // how many bombs the player is carrying
+  };
+
+  // ============================================================
+  //  THE CHARACTER SPRITE  ← Connor's drawing board!
+  // ============================================================
+  // Each letter below is one pixel of the character. Change the
+  // letters to redraw him, then refresh the browser to see it.
+  //   .  = see-through (nothing)          W = eye white
+  //   A  = antenna tip (glow)             E = eye pupil
+  //   G  = green alien skin               P = spring metal
+  // Want a new color? Add it to SPRITE_COLORS, then use its letter.
+  const SPRITE_COLORS = {
+    A: "#ff5ce1", // glowing antenna tips
+    G: "#5ad63a", // alien green skin
+    W: "#ffffff", // eye whites
+    E: "#1a1a1a", // eye pupils
+    P: "#b0b0b0", // springy metal coil
+  };
+
+  // The alien's head & body (edit his face here, just once).
+  const BODY = [
+    "..A..A..", // antenna tips
+    "..G..G..", // antenna stalks
+    ".GGGGGG.", // top of head
+    "GGGGGGGG", // head
+    "GWWGGWWG", // big eyes (whites)
+    "GWEGGEWG", // eyes looking forward (pupils)
+    "GGGGGGGG", // cheeks
+    ".GGGGGG.", // little body
+  ];
+
+  // Two different springs for the bottom of the alien.
+  const SPRING_COILED = [
+    ".PPPPPP.", // all coiled up (used while standing)
+    ".P....P.",
+    ".PPPPPP.",
+    ".P....P.",
+  ];
+  const SPRING_STRETCHED = [
+    "..PP....", // sprung open into a zig-zag (used while jumping)
+    "....PP..",
+    "..PP....",
+    "....PP..",
+  ];
+
+  // Glue the body to each spring to make the two full poses.
+  const SPRITE_COILED = BODY.concat(SPRING_COILED);
+  const SPRITE_STRETCHED = BODY.concat(SPRING_STRETCHED);
+
+  // ============================================================
+  //  THE ENEMY SPRITE (a rounded purple alien, drawn in pixels)
+  // ============================================================
+  //   P = purple body   D = dark purple (feet)   A = antenna glow
+  //   W = eye white      E = eye pupil            M = mouth
+  const ENEMY_COLORS = {
+    P: "#9b3ff2",
+    D: "#7a25c9",
+    A: "#e05cff",
+    W: "#ffffff",
+    E: "#1a1a1a",
+    M: "#4a1a7a",
+  };
+  const ENEMY_SPRITE = [
+    "..A...A..", // antenna tips
+    "..P...P..", // antenna stalks
+    "..PPPPP..", // rounded head top
+    ".PPPPPPP.",
+    "PPPPPPPPP", // widest part of the body
+    "PWWPPPWWP", // eyes (whites)
+    "PWEPPPEWP", // eyes (pupils)
+    ".PPMMMPP.", // rounded chin + mouth
+    "..D...D..", // little feet
+  ];
+
+  // ============================================================
+  //  THE GOAL FLAG SPRITE (a pixel pennant on a pole)
+  // ============================================================
+  //   O = pole (brown)    R = flag (red)    . = see-through
+  const FLAG_COLORS = {
+    O: "#8b5a2b",
+    R: "#e94560",
+  };
+  const FLAG_SPRITE = [
+    "ORRRRRR", // flag: full width at the top...
+    "ORRRRRR",
+    "ORRRRR.",
+    "ORRRR..", // ...then tapering to a point
+    "ORRR...",
+    "ORR....",
+    "OR.....",
+    "O......", // the pole runs down the rest
+    "O......",
+    "O......",
+    "O......",
+    "O......",
+    "O......",
+    "O......",
+    "O......",
+    "O......",
+  ];
+
+  // ============================================================
+  //  THE BOMB SPRITE (a round bomb with a lit fuse, in pixels)
+  // ============================================================
+  //   K = black body   H = highlight   F = fuse   S = spark   . = clear
+  const BOMB_COLORS = {
+    K: "#222831",
+    H: "#5a6472",
+    F: "#a56b2b",
+    S: "#ffcf33",
+  };
+  const BOMB_SPRITE = [
+    ".....S..", // sparky tip
+    "....F...", // fuse
+    "...KK...", // top of the round body
+    "..KKKK..",
+    "..HKKK..", // H = shiny highlight
+    "..KKKK..",
+    "...KK...", // bottom of the body
+  ];
+
+  // ============================================================
+  //  LEVELS
+  // ============================================================
+  // The game is a list of levels. Each level says where the player
+  // starts, which platforms exist, and where the GOAL (flag) is.
+  // Reach the goal to move on to the next level!
+  const levels = [
+    {
+      start: { x: 100, y: 100 },
+      platforms: [
+        { x: 0,   y: 410, width: 800, height: 40 }, // ground
+        { x: 150, y: 320, width: 140, height: 20 },
+        { x: 380, y: 250, width: 140, height: 20 },
+      ],
+      goal: { x: 600, y: 180, width: 140, height: 20 },
+    },
+    {
+      // Level 2: nothing but the ground and a high goal at the far end —
+      // run across, then clear it in one big jump!
+      start: { x: 80, y: 300 },
+      platforms: [
+        { x: 0, y: 410, width: 800, height: 40 }, // ground
+      ],
+      goal: { x: 610, y: 200, width: 150, height: 20 },
+    },
+    {
+      // Level 3: the floor is LAVA! Hop across the platforms to survive.
+      start: { x: 50, y: 280 },
+      platforms: [
+        { x: 20,  y: 370, width: 130, height: 20 }, // safe starting ledge
+        { x: 230, y: 330, width: 110, height: 20 }, // stepping stones...
+        { x: 420, y: 300, width: 110, height: 20 },
+      ],
+      goal: { x: 620, y: 270, width: 130, height: 20 },
+      lava: { x: 0, y: 420, width: 800, height: 30 }, // deadly floor
+    },
+    {
+      // Level 4: the middle platform is rickety! Step on it and it drops
+      // into the lava, so you must hop across it fast (or leap the gap).
+      start: { x: 50, y: 280 },
+      platforms: [
+        { x: 20,  y: 360, width: 120, height: 20 },              // safe start
+        { x: 300, y: 360, width: 130, height: 20, falls: true }, // RICKETY!
+      ],
+      goal: { x: 630, y: 340, width: 130, height: 20 },
+      lava: { x: 0, y: 420, width: 800, height: 30 },
+    },
+    {
+      // Level 5: a purple alien paces back and forth — jump over it!
+      start: { x: 60, y: 300 },
+      platforms: [
+        { x: 0, y: 410, width: 800, height: 40 }, // ground
+      ],
+      enemies: [
+        // Walks between minX and maxX, turning around at each end.
+        { x: 300, y: 376, width: 34, height: 34,
+          speed: 1.8, dir: 1, minX: 230, maxX: 560 },
+      ],
+      goal: { x: 660, y: 350, width: 120, height: 20 },
+    },
+    {
+      // Level 6: the goal is too far to jump to — ride the moving
+      // platform across the lava to reach it!
+      start: { x: 40, y: 300 },
+      platforms: [
+        { x: 20, y: 360, width: 140, height: 20 }, // safe start ledge
+        // The moving ferry. It slides along its axis between min and max.
+        { x: 160, y: 360, width: 90, height: 20,
+          move: true, axis: "x", speed: 3, dir: 1, min: 160, max: 520 },
+      ],
+      goal: { x: 640, y: 330, width: 130, height: 20 },
+      lava: { x: 0, y: 420, width: 800, height: 30 },
+    },
+    {
+      // Level 7: a brick wall blocks the path from floor to ceiling — you
+      // can't jump over it. Grab the bomb, walk up to the wall, and press
+      // F to throw it and blast a hole through!
+      start: { x: 40, y: 300 },
+      platforms: [
+        { x: 0, y: 410, width: 800, height: 40 },              // ground
+        { x: 420, y: 0, width: 40, height: 410, brick: true }, // the wall
+      ],
+      items: [
+        { x: 200, y: 390, width: 20, height: 20, type: "bomb" }, // pick me up!
+      ],
+      goal: { x: 680, y: 360, width: 110, height: 20 },
+    },
+  ];
+
+  // Which level we're on, and whether the whole game has been won.
+  let currentLevel = 0;
+  let gameWon = false;
+
+  // The "Restart" button shown on the win screen (x, y, width, height).
+  const RESTART_BTN = { x: 300, y: 250, width: 200, height: 56 };
+
+  // Timer shown beneath the game, controlled by the Start / Restart buttons.
+  const timerEl = document.getElementById("timer");
+  let timerRunning = false; // is the timer counting right now?
+  let elapsedMs = 0;        // how much time has been counted so far
+  let startTime = 0;        // performance.now() that lines up with elapsed = 0
+
+  // Best (fastest) finish time. loadBest() reads it from the browser's
+  // storage so it's remembered even after you close the page.
+  const bestEl = document.getElementById("best");
+  let bestMs = loadBest();
+  let prevGameWon = false; // was the game already won last frame?
+
+  // These hold the platforms/goal/lava for the level we're playing now.
+  // loadLevel() fills them in.
+  let platforms = [];
+  let goal = null;
+  let lava = null;    // some levels have a lava floor; others don't
+  let enemies = [];   // some levels have walking enemies; others don't
+  let items = [];       // pickups sitting in the level (like bombs)
+  let thrownBombs = []; // bombs currently flying through the air
+  let prevThrow = false; // was the throw key down last frame? (one throw per press)
+  let tick = 0;       // counts frames, used to animate the lava
+
+  // Set up a level: place the player at the start and load its platforms.
+  function loadLevel(index) {
+    const level = levels[index];
+    // Copy each platform so we can safely change one (like a falling
+    // platform) without permanently altering the level for next time.
+    platforms = level.platforms.map((p) => ({ ...p }));
+    goal = level.goal;
+    lava = level.lava || null; // no lava on this level? then null.
+    // Copy enemies too, so their positions reset when you respawn.
+    enemies = (level.enemies || []).map((e) => ({ ...e }));
+    // Fresh copies of the pickups, and clear any bombs / carried items.
+    items = (level.items || []).map((it) => ({ ...it }));
+    thrownBombs = [];
+    player.bombs = 0;
+    player.facing = 1;
+    player.x = level.start.x;
+    player.y = level.start.y;
+    player.vx = 0;
+    player.vy = 0;
+  }
+
+  loadLevel(currentLevel); // start on the first level
+
+  // Start the whole game over from Level 1 (used by the Restart button).
+  function restartGame() {
+    currentLevel = 0;
+    gameWon = false;
+    restartTimer(); // reset the timer to 0:00, paused until Start is pressed
+    loadLevel(0);
+  }
+
+  // ============================================================
+  //  KEYBOARD INPUT
+  // ============================================================
+  // We remember which keys are currently held down.
+  const keys = {};
+  document.addEventListener("keydown", (e) => {
+    keys[e.code] = true;
+    // Stop the page from scrolling when using arrows / space.
+    if (["ArrowUp", "ArrowDown", "Space"].includes(e.code)) e.preventDefault();
+  });
+  document.addEventListener("keyup", (e) => {
+    keys[e.code] = false;
+  });
+
+  // --- Secret level warp: tap "a", then a number (1-9), to jump levels ---
+  // We remember when "a" was just pressed. If the next key is a number,
+  // we treat it as a warp code instead of normal typing.
+  let warpArmed = false;
+  document.addEventListener("keydown", (e) => {
+    if (e.code === "KeyA") {
+      warpArmed = true; // "a" starts the combo (it still moves left too)
+    } else if (warpArmed && e.key >= "1" && e.key <= "9") {
+      const index = Number(e.key) - 1; // "1" is the first level
+      if (index < levels.length) {
+        currentLevel = index;
+        gameWon = false;       // in case we'd already won
+        loadLevel(currentLevel);
+      }
+      warpArmed = false;
+    } else {
+      warpArmed = false; // any other key cancels the combo
+    }
+  });
+
+  // ============================================================
+  //  MOUSE INPUT
+  // ============================================================
+  // Turn a mouse event into a position on the game canvas (the canvas
+  // might be displayed at a different size than its 800x450 drawing area,
+  // so we scale the coordinates to match).
+  function mousePos(ev) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: (ev.clientX - r.left) * (canvas.width / r.width),
+      y: (ev.clientY - r.top) * (canvas.height / r.height),
+    };
+  }
+  // Is the mouse currently over the Restart button?
+  function overRestartButton(ev) {
+    const m = mousePos(ev);
+    const b = RESTART_BTN;
+    return (
+      m.x >= b.x && m.x <= b.x + b.width &&
+      m.y >= b.y && m.y <= b.y + b.height
+    );
+  }
+  // Click the Restart button (only on the win screen) to play again.
+  canvas.addEventListener("click", (ev) => {
+    if (gameWon && overRestartButton(ev)) restartGame();
+  });
+  // Show a pointer cursor when hovering the button, so it feels clickable.
+  canvas.addEventListener("mousemove", (ev) => {
+    canvas.style.cursor = gameWon && overRestartButton(ev) ? "pointer" : "default";
+  });
+
+  // ============================================================
+  //  HELPERS
+  // ============================================================
+  // Returns true if two rectangles are touching/overlapping.
+  // We reuse this for both landing on platforms and reaching the goal.
+  function rectsOverlap(a, b) {
+    return (
+      a.x < b.x + b.width &&
+      a.x + a.width > b.x &&
+      a.y < b.y + b.height &&
+      a.y + a.height > b.y
+    );
+  }
+
+  // True if the player is resting on top of platform p (feet on its
+  // surface and horizontally overlapping). Used to "ride" moving platforms.
+  function isStandingOn(p) {
+    return (
+      player.x < p.x + p.width &&
+      player.x + player.width > p.x &&
+      Math.abs((player.y + player.height) - p.y) <= 2
+    );
+  }
+
+  // ============================================================
+  //  UPDATE — runs every frame to move things
+  // ============================================================
+  function update() {
+    // If the game is won, freeze the action (the win screen shows instead).
+    if (gameWon) return;
+    // --- Left / right movement ---
+    if (keys["ArrowLeft"] || keys["KeyA"]) {
+      player.vx = -MOVE_SPEED;
+      player.facing = -1; // now looking left
+    } else if (keys["ArrowRight"] || keys["KeyD"]) {
+      player.vx = MOVE_SPEED;
+      player.facing = 1; // now looking right
+    } else {
+      player.vx = 0; // no key held = stop
+    }
+
+    // --- Jumping ---
+    // Only allow a jump if the player is standing on something.
+    const jumpPressed = keys["Space"] || keys["ArrowUp"] || keys["KeyW"];
+    if (jumpPressed && player.onGround) {
+      player.vy = -JUMP_STRENGTH; // negative = upward
+      player.onGround = false;
+    }
+
+    // --- Throwing a bomb (press F), but only if we're carrying one ---
+    // We only throw on the frame the key goes DOWN, so holding F doesn't
+    // spray a stream of bombs.
+    const throwPressed = keys["KeyF"];
+    if (throwPressed && !prevThrow && player.bombs > 0) {
+      player.bombs--;
+      thrownBombs.push({
+        x: player.x + player.width / 2 - 8,
+        y: player.y + player.height / 2 - 8,
+        width: 16,
+        height: 16,
+        vx: 8 * player.facing, // flies the way the player is looking
+      });
+    }
+    prevThrow = throwPressed;
+
+    // --- Gravity ---
+    player.vy += GRAVITY;
+
+    // --- Rickety platforms: once stepped on, wobble then plummet ---
+    for (const p of platforms) {
+      if (p.falls && p.triggered) {
+        p.fallTimer = (p.fallTimer || 0) + 1;
+        if (p.fallTimer > FALL_DELAY) {
+          p.vy = (p.vy || 0) + GRAVITY; // start falling, faster each frame
+          p.y += p.vy;
+        }
+      }
+    }
+
+    // --- Moving platforms: slide back and forth, carrying any rider ---
+    for (const p of platforms) {
+      if (!p.move) continue;
+
+      // Pausing at an end? Count down and stay still this frame.
+      if (p.wait > 0) { p.wait--; continue; }
+
+      const pos = p.axis === "x" ? p.x : p.y;   // position along its track
+      let next = pos + p.speed * p.dir;
+      // Reached an end: clamp there, turn around, and pause for a moment.
+      if (next <= p.min) { next = p.min; p.dir = 1;  p.wait = PLATFORM_PAUSE; }
+      if (next >= p.max) { next = p.max; p.dir = -1; p.wait = PLATFORM_PAUSE; }
+      const delta = next - pos;
+      const dx = p.axis === "x" ? delta : 0;
+      const dy = p.axis === "y" ? delta : 0;
+      // If the player is riding on top, move them along with the platform.
+      if (isStandingOn(p)) { player.x += dx; player.y += dy; }
+      p.x += dx;
+      p.y += dy;
+    }
+
+    // --- Thrown bombs fly straight ahead and blow up brick walls ---
+    for (let i = thrownBombs.length - 1; i >= 0; i--) {
+      const b = thrownBombs[i];
+      b.x += b.vx;
+
+      // Did it reach a brick wall? If so, destroy the wall and the bomb.
+      let hitWall = false;
+      for (let j = platforms.length - 1; j >= 0; j--) {
+        if (platforms[j].brick && rectsOverlap(b, platforms[j])) {
+          platforms.splice(j, 1); // the wall is gone!
+          hitWall = true;
+        }
+      }
+
+      if (hitWall) {
+        thrownBombs.splice(i, 1);
+      } else if (b.x < -20 || b.x > canvas.width + 20) {
+        // Flew off-screen without hitting anything — give the bomb back
+        // so the player can never get permanently stuck.
+        player.bombs++;
+        thrownBombs.splice(i, 1);
+      }
+    }
+
+    // The goal counts as solid too, so we handle them all together.
+    const solids = platforms.concat([goal]);
+
+    // --- Horizontal movement, then stop at any wall we run into ---
+    // We move on the X axis first and resolve side collisions separately
+    // from vertical ones. Doing one axis at a time keeps the math simple.
+    player.x += player.vx;
+    for (const p of solids) {
+      if (rectsOverlap(player, p)) {
+        if (player.vx > 0) {
+          player.x = p.x - player.width; // moving right: stop at its left side
+        } else if (player.vx < 0) {
+          player.x = p.x + p.width;      // moving left: stop at its right side
+        }
+      }
+    }
+    // Keep the player inside the left/right edges of the canvas.
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.width > canvas.width) {
+      player.x = canvas.width - player.width;
+    }
+
+    // --- Vertical movement, then stop on floors and ceilings ---
+    player.y += player.vy;
+    player.onGround = false; // assume falling until we prove otherwise
+    let reachedGoal = false;
+    for (const p of solids) {
+      if (rectsOverlap(player, p)) {
+        if (player.vy > 0) {
+          // Moving down: land on top of the platform.
+          player.y = p.y - player.height;
+          player.onGround = true;
+          if (p === goal) reachedGoal = true; // we're standing on the flag!
+          if (p.falls) p.triggered = true;    // stepping on it starts the drop
+        } else if (player.vy < 0) {
+          // Moving up: bonk our head, so we can't pass through from below.
+          player.y = p.y + p.height;
+        }
+        player.vy = 0;
+      }
+    }
+
+    // --- Fell in the lava (or off the bottom)? Restart this level. ---
+    if ((lava && rectsOverlap(player, lava)) || player.y > canvas.height) {
+      loadLevel(currentLevel); // respawn at the start of this level
+      return; // we just respawned, so skip the rest of this frame
+    }
+
+    // --- Enemies pace back and forth, and are deadly to touch ---
+    for (const e of enemies) {
+      e.x += e.speed * e.dir; // walk in the current direction
+      if (e.x <= e.minX) { e.x = e.minX; e.dir = 1; }  // hit left edge: turn right
+      if (e.x + e.width >= e.maxX) {                    // hit right edge: turn left
+        e.x = e.maxX - e.width;
+        e.dir = -1;
+      }
+      if (rectsOverlap(player, e)) { // touched the alien? back to the start
+        loadLevel(currentLevel);
+        return;
+      }
+    }
+
+    // --- Pick up items (like bombs) by walking over them ---
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (rectsOverlap(player, items[i])) {
+        if (items[i].type === "bomb") player.bombs++;
+        items.splice(i, 1); // it's collected, remove it from the level
+      }
+    }
+
+    // --- Reached the goal? (i.e. we landed on the gold platform) ---
+    if (reachedGoal) {
+      if (currentLevel < levels.length - 1) {
+        currentLevel++;
+        loadLevel(currentLevel); // on to the next level!
+      } else {
+        gameWon = true; // that was the last level — you win!
+      }
+    }
+  }
+
+  // ============================================================
+  //  DRAW — runs every frame to paint the picture
+  // ============================================================
+  function draw() {
+    // Clear the previous frame.
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    tick++; // move the lava animation along a little each frame
+
+    // Draw the lava first (behind everything), if this level has any.
+    if (lava) drawLava(lava);
+
+    // Draw platforms. A rickety (falling) platform looks exactly like a
+    // normal one, so it's a hidden trap — it only jitters AFTER you step
+    // on it, once it's already on its way down. A moving platform is teal
+    // with a bright top, so players know they can ride it.
+    for (const p of platforms) {
+      const shakeX = p.falls && p.triggered ? Math.sin(tick * 1.5) * 2 : 0;
+      if (p.brick) {
+        drawBrickWall(p);
+      } else if (p.move) {
+        ctx.fillStyle = "#2a9d8f";
+        ctx.fillRect(p.x + shakeX, p.y, p.width, p.height);
+        ctx.fillStyle = "#8ee4d8"; // light top edge = "this is a machine"
+        ctx.fillRect(p.x + shakeX, p.y, p.width, 3);
+      } else {
+        ctx.fillStyle = "#0f3460";
+        ctx.fillRect(p.x + shakeX, p.y, p.width, p.height);
+      }
+    }
+
+    // Draw the goal (a gold block with a flag on a pole).
+    drawGoal(goal);
+
+    // Draw any walking enemies.
+    for (const e of enemies) drawEnemy(e);
+
+    // Draw bomb pickups sitting in the level, and any bombs in the air.
+    for (const it of items) {
+      if (it.type === "bomb") drawBomb(it.x + it.width / 2, it.y + it.height / 2, 9);
+    }
+    for (const b of thrownBombs) drawBomb(b.x + b.width / 2, b.y + b.height / 2, 8);
+
+    // Draw the player from its pixel-art grid.
+    drawPlayer();
+
+    // Show how many bombs the player is carrying, in the top-right corner.
+    if (player.bombs > 0) {
+      drawBomb(canvas.width - 78, 24, 9);
+      ctx.fillStyle = "#16213e";
+      ctx.font = "bold 20px sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("x " + player.bombs, canvas.width - 64, 30);
+    }
+
+    // Show which level we're on, up in the corner.
+    ctx.fillStyle = "#16213e";
+    ctx.font = "bold 20px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("Level " + (currentLevel + 1), 16, 30);
+
+    // If the game is won, cover the screen with a win message + button.
+    if (gameWon) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#ffd700";
+      ctx.font = "bold 48px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("You Win! 🏆", canvas.width / 2, 180);
+
+      // The clickable "Restart" button.
+      const b = RESTART_BTN;
+      ctx.fillStyle = "#e94560";
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(b.x, b.y, b.width, b.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 26px sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Restart", b.x + b.width / 2, b.y + b.height / 2 + 2);
+      ctx.textBaseline = "alphabetic"; // reset so other text isn't affected
+    }
+  }
+
+  // Draws the lava: a glowing pool with a gently rippling surface.
+  function drawLava(l) {
+    // The deep, molten body.
+    ctx.fillStyle = "#c1290b";
+    ctx.fillRect(l.x, l.y, l.width, l.height);
+
+    // A rippling surface made of little blocks that bob up and down.
+    // Math.sin makes a smooth wave; "tick" makes the wave move over time.
+    const blockW = 20;
+    for (let x = l.x; x < l.x + l.width; x += blockW) {
+      const bob = Math.sin((x + tick * 2) / 30) * 3; // -3..+3 pixels
+      ctx.fillStyle = "#ff7b29"; // bright orange glow
+      ctx.fillRect(x, l.y + bob, blockW, 6);
+      ctx.fillStyle = "#ffd34d"; // hottest yellow highlight on top
+      ctx.fillRect(x, l.y + bob, blockW, 2);
+    }
+  }
+
+  // Draws a pixel-art bomb centered at (cx, cy). r sets its size (the body
+  // ends up about 2*r across), so all the existing callers still work.
+  function drawBomb(cx, cy, r) {
+    const pixel = r * 0.42; // size of one grid-pixel
+    const boxW = BOMB_SPRITE[0].length * pixel;
+    const boxH = BOMB_SPRITE.length * pixel;
+    // Center the grid on (cx, cy).
+    drawPixelSprite(BOMB_SPRITE, BOMB_COLORS, cx - boxW / 2, cy - boxH / 2, boxW, boxH);
+  }
+
+  // Draws a brick wall filling the box p, in a staggered brick pattern.
+  function drawBrickWall(p) {
+    ctx.fillStyle = "#5e271b"; // dark mortar shows between the bricks
+    ctx.fillRect(p.x, p.y, p.width, p.height);
+    ctx.fillStyle = "#a8452f"; // the bricks themselves
+    const bw = 20, bh = 14, gap = 2;
+    let row = 0;
+    for (let y = p.y; y < p.y + p.height; y += bh) {
+      const offset = row % 2 ? -bw / 2 : 0; // shift every other row
+      for (let x = p.x + offset; x < p.x + p.width; x += bw) {
+        // Keep each brick clipped inside the wall.
+        const bx = Math.max(x, p.x);
+        const bwidth = Math.min(x + bw - gap, p.x + p.width) - bx;
+        const bheight = Math.min(y + bh - gap, p.y + p.height) - y;
+        if (bwidth > 0 && bheight > 0) ctx.fillRect(bx, y, bwidth, bheight);
+      }
+      row++;
+    }
+  }
+
+  // Draws the purple alien from its pixel grid, mirrored to face the way
+  // it's walking (so its eyes look in the direction it moves).
+  function drawEnemy(e) {
+    const faceLeft = e.dir < 0;
+    drawPixelSprite(ENEMY_SPRITE, ENEMY_COLORS, e.x, e.y, e.width, e.height, faceLeft);
+  }
+
+  // Draws a goal: a gold platform with a pixel-art flag standing on it.
+  function drawGoal(g) {
+    // The gold platform you stand on.
+    ctx.fillStyle = "#ffd700";
+    ctx.fillRect(g.x, g.y, g.width, g.height);
+
+    // The flag (pole + pennant), drawn as pixels so it matches the blocky
+    // style of the characters. Each grid pixel is PIXEL screen-pixels big.
+    const PIXEL = 4;
+    const boxW = FLAG_SPRITE[0].length * PIXEL;
+    const boxH = FLAG_SPRITE.length * PIXEL;
+    const x = g.x + g.width / 2; // pole sits at the middle of the platform
+    const y = g.y - boxH;        // and rises up from its top
+    drawPixelSprite(FLAG_SPRITE, FLAG_COLORS, x, y, boxW, boxH);
+  }
+
+  // Paints a pixel-art grid (a list of letter-rows) into the box x,y,w,h.
+  // Each letter is looked up in `colors`; "." or unknown letters draw
+  // nothing. Set flip=true to mirror it left-right. Used for the player
+  // AND the enemy, so we only write this pixel-drawing loop once.
+  function drawPixelSprite(grid, colors, x, y, w, h, flip = false) {
+    const rows = grid.length;
+    const cols = grid[0].length;
+    const pixelW = w / cols; // size of one grid-pixel
+    const pixelH = h / rows;
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const color = colors[grid[row][col]];
+        if (!color) continue;
+
+        const drawCol = flip ? cols - 1 - col : col; // mirror if flipped
+        ctx.fillStyle = color;
+        // Rounding sizes up avoids thin gaps between pixels.
+        ctx.fillRect(
+          x + drawCol * pixelW,
+          y + row * pixelH,
+          Math.ceil(pixelW),
+          Math.ceil(pixelH)
+        );
+      }
+    }
+  }
+
+  // Draws the player character from its pixel grid.
+  function drawPlayer() {
+    // On the ground the spring is coiled; in the air it uncoils and we
+    // draw the alien taller so the spring boings out below his feet.
+    const inAir = !player.onGround;
+    const sprite = inAir ? SPRITE_STRETCHED : SPRITE_COILED;
+    const drawHeight = player.height * (inAir ? 1.3 : 1);
+    drawPixelSprite(sprite, SPRITE_COLORS, player.x, player.y, player.width, drawHeight);
+  }
+
+  // ============================================================
+  //  THE TIMER
+  // ============================================================
+  // Turn a number of milliseconds into a "M:SS" string.
+  function formatTime(ms) {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes + ":" + String(seconds).padStart(2, "0");
+  }
+  // Start (or resume) counting from where we left off.
+  function startTimer() {
+    if (!timerRunning) {
+      // Line up startTime so that (now - startTime) equals the time so far.
+      startTime = performance.now() - elapsedMs;
+      timerRunning = true;
+    }
+  }
+  // Reset back to 0 and leave it PAUSED, waiting for the Start button.
+  function restartTimer() {
+    elapsedMs = 0;
+    timerRunning = false;
+  }
+  // Read/write the best time from the browser's storage. Wrapped in
+  // try/catch because some browsers block storage when opened as a file.
+  function loadBest() {
+    try {
+      const v = localStorage.getItem("bestTimeMs");
+      return v !== null ? Number(v) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function saveBest(ms) {
+    try {
+      localStorage.setItem("bestTimeMs", String(Math.round(ms)));
+    } catch (e) {
+      /* storage not available — the best time just won't persist */
+    }
+  }
+
+  // Update the on-screen timer text each frame. While running (and not yet
+  // won), we recompute the elapsed time; otherwise it stays frozen.
+  function updateTimer() {
+    if (timerRunning && !gameWon) {
+      elapsedMs = performance.now() - startTime;
+    }
+    timerEl.textContent = "Time: " + formatTime(elapsedMs);
+
+    // The frame we FIRST win, check for a new best time (only if the timer
+    // was actually running — otherwise it's not a real timed run).
+    if (gameWon && !prevGameWon && timerRunning) {
+      if (bestMs === null || elapsedMs < bestMs) {
+        bestMs = elapsedMs;
+        saveBest(bestMs);
+      }
+    }
+    prevGameWon = gameWon;
+
+    bestEl.textContent = "Best: " + (bestMs === null ? "--" : formatTime(bestMs));
+  }
+
+  // Wire the two buttons under the game. Start just starts the timer;
+  // Restart resets the ENTIRE game (back to Level 1) and the timer.
+  document.getElementById("startBtn").addEventListener("click", startTimer);
+  document.getElementById("restartBtn").addEventListener("click", restartGame);
+
+  // ============================================================
+  //  THE GAME LOOP
+  // ============================================================
+  // This runs update + draw about 60 times per second, forever.
+  function gameLoop() {
+    update();
+    draw();
+    updateTimer();
+    requestAnimationFrame(gameLoop);
+  }
+  gameLoop();
+  </script>
+</body>
+</html>
