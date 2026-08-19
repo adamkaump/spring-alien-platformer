@@ -17,9 +17,6 @@ a browser window). That's it.
 | Jump | `Space`, `Up`, or `W` |
 | Throw a bomb | `F` |
 
-There's also a secret: tap **`a` then a number (1–7)** to warp straight to that
-level.
-
 ## The levels
 
 1. **Platforms** — hop up a few ledges to the flag.
