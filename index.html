@@ -134,9 +134,10 @@
   // Two different springs for the bottom of the alien.
   const SPRING_COILED = [
     ".PPPPPP.", // all coiled up (used while standing)
-    ".P....P.",
+    ".P......",
     ".PPPPPP.",
-    ".P....P.",
+    "......P.",
+    ".PPPPPP."
   ];
   const SPRING_STRETCHED = [
     "..PP....", // sprung open into a zig-zag (used while jumping)
@@ -172,6 +173,28 @@
     "PWEPPPEWP", // eyes (pupils)
     ".PPMMMPP.", // rounded chin + mouth
     "..D...D..", // little feet
+  ];
+
+  // ============================================================
+  //  THE SLIME BOSS SPRITE (a big green blob monster)
+  // ============================================================
+  //   S = slime green   D = dark slime (mouth)   W = eye white   E = pupil
+  const SLIME_COLORS = {
+    S: "#6ab04c",
+    D: "#33501f",
+    W: "#ffffff",
+    E: "#1a1a1a",
+  };
+  const SLIME_SPRITE = [
+    "...SSSSS...", // rounded top of the blob
+    "..SSSSSSS..",
+    ".SSSSSSSSS.",
+    "SSSSSSSSSSS",
+    "SWWSSSSSWWS", // big eyes (whites)
+    "SWESSSSSEWS", // pupils
+    "SSSSSSSSSSS",
+    "SSSDDDDDSSS", // gooey mouth
+    "SSSSSSSSSSS", // flat bottom, sitting on the ground
   ];
 
   // ============================================================
@@ -258,15 +281,18 @@
       lava: { x: 0, y: 420, width: 800, height: 30 }, // deadly floor
     },
     {
-      // Level 4: the middle platform is rickety! Step on it and it drops
-      // into the lava, so you must hop across it fast (or leap the gap).
-      start: { x: 50, y: 280 },
+      // Level 4: a brick wall blocks the path from floor to ceiling — you
+      // can't jump over it. Grab the bomb, walk up to the wall, and press
+      // F to throw it and blast a hole through!
+      start: { x: 40, y: 300 },
       platforms: [
-        { x: 20,  y: 360, width: 120, height: 20 },              // safe start
-        { x: 300, y: 360, width: 130, height: 20, falls: true }, // RICKETY!
+        { x: 0, y: 410, width: 800, height: 40 },              // ground
+        { x: 420, y: 0, width: 40, height: 410, brick: true }, // the wall
       ],
-      goal: { x: 630, y: 340, width: 130, height: 20 },
-      lava: { x: 0, y: 420, width: 800, height: 30 },
+      items: [
+        { x: 200, y: 390, width: 20, height: 20, type: "bomb" }, // pick me up!
+      ],
+      goal: { x: 680, y: 360, width: 110, height: 20 },
     },
     {
       // Level 5: a purple alien paces back and forth — jump over it!
@@ -295,26 +321,54 @@
       lava: { x: 0, y: 420, width: 800, height: 30 },
     },
     {
-      // Level 7: a brick wall blocks the path from floor to ceiling — you
-      // can't jump over it. Grab the bomb, walk up to the wall, and press
-      // F to throw it and blast a hole through!
+      // Level 7: the middle platform is rickety! Step on it and it drops
+      // into the lava, so you must hop across it fast (or leap the gap).
+      start: { x: 50, y: 280 },
+      platforms: [
+        { x: 20,  y: 360, width: 120, height: 20 },              // safe start
+        { x: 300, y: 360, width: 130, height: 20, falls: true }, // RICKETY!
+      ],
+      goal: { x: 630, y: 340, width: 130, height: 20 },
+      lava: { x: 0, y: 420, width: 800, height: 30 },
+    },
+    {
+      // Level 8: BOSS FIGHT! A slime monster shoots deadly slime balls.
+      // Ride the lift up to grab a bomb, then throw it at the slime to
+      // destroy it. (No goal flag — killing the slime wins the level.)
       start: { x: 40, y: 300 },
       platforms: [
-        { x: 0, y: 410, width: 800, height: 40 },              // ground
-        { x: 420, y: 0, width: 40, height: 410, brick: true }, // the wall
+        { x: 0, y: 410, width: 800, height: 40 }, // ground
+        // A lift: a platform that rides up and down (axis "y").
+        { x: 110, y: 360, width: 70, height: 16,
+          move: true, axis: "y", speed: 2, dir: -1, min: 170, max: 360 },
+        { x: 200, y: 180, width: 170, height: 16 }, // high platform (bomb up here)
       ],
       items: [
-        { x: 200, y: 390, width: 20, height: 20, type: "bomb" }, // pick me up!
+        { x: 270, y: 160, width: 20, height: 20, type: "bomb" }, // reachable via the lift
       ],
-      goal: { x: 680, y: 360, width: 110, height: 20 },
+      boss: {
+        x: 660, y: 300, width: 100, height: 110,
+        shootInterval: 100, // frames between slime-ball shots
+      },
     },
   ];
 
   // Which level we're on, and whether the whole game has been won.
   let currentLevel = 0;
   let gameWon = false;
+  let onHomeScreen = true; // show the title screen until Start is clicked
+  // Which mode we're playing:
+  //   "normal"    dying respawns at the current level
+  //   "hard"      dying sends you to Level 1 and resets the timer
+  //   "superhard" dying sends you to Level 1 but the timer keeps running
+  let mode = "normal";
 
-  // The "Restart" button shown on the win screen (x, y, width, height).
+  // Buttons (each an x, y, width, height rectangle): three on the home
+  // screen, and Restart on the win screen.
+  const START_BTN = { x: 280, y: 210, width: 240, height: 42 };
+  const HARDCORE_BTN = { x: 280, y: 258, width: 240, height: 42 };
+  const SUPER_BTN = { x: 280, y: 306, width: 240, height: 42 };
+  const RESET_SCORE_BTN = { x: 280, y: 360, width: 240, height: 38 };
   const RESTART_BTN = { x: 300, y: 250, width: 200, height: 56 };
 
   // Timer shown beneath the game, controlled by the Start / Restart buttons.
@@ -323,18 +377,24 @@
   let elapsedMs = 0;        // how much time has been counted so far
   let startTime = 0;        // performance.now() that lines up with elapsed = 0
 
-  // Best (fastest) finish time. loadBest() reads it from the browser's
-  // storage so it's remembered even after you close the page.
+  // Best (fastest) finish times, kept separately for normal and hardcore
+  // modes. loadBest() reads them from the browser's storage so they're
+  // remembered even after you close the page.
   const bestEl = document.getElementById("best");
-  let bestMs = loadBest();
+  let bestNormalMs = loadBest("bestTimeMs_v2");
+  let bestHardMs = loadBest("bestTimeHardMs_v2");
+  let bestSuperMs = loadBest("bestTimeSuperMs_v2");
   let prevGameWon = false; // was the game already won last frame?
 
   // These hold the platforms/goal/lava for the level we're playing now.
   // loadLevel() fills them in.
   let platforms = [];
-  let goal = null;
+  let goal = null;    // most levels have a goal flag; a boss level may not
   let lava = null;    // some levels have a lava floor; others don't
   let enemies = [];   // some levels have walking enemies; others don't
+  let boss = null;      // a boss monster (the slime), if this level has one
+  let slimeBalls = [];  // slime balls the boss is currently shooting
+  let brickBits = [];   // falling pieces from a crumbling brick wall
   let items = [];       // pickups sitting in the level (like bombs)
   let thrownBombs = []; // bombs currently flying through the air
   let prevThrow = false; // was the throw key down last frame? (one throw per press)
@@ -346,10 +406,14 @@
     // Copy each platform so we can safely change one (like a falling
     // platform) without permanently altering the level for next time.
     platforms = level.platforms.map((p) => ({ ...p }));
-    goal = level.goal;
+    goal = level.goal || null; // boss levels may have no flag
     lava = level.lava || null; // no lava on this level? then null.
     // Copy enemies too, so their positions reset when you respawn.
     enemies = (level.enemies || []).map((e) => ({ ...e }));
+    // Fresh copy of the boss (if any), and clear its slime balls.
+    boss = level.boss ? { ...level.boss } : null;
+    slimeBalls = [];
+    brickBits = []; // clear any leftover crumbling-wall pieces
     // Fresh copies of the pickups, and clear any bombs / carried items.
     items = (level.items || []).map((it) => ({ ...it }));
     thrownBombs = [];
@@ -369,6 +433,39 @@
     gameWon = false;
     restartTimer(); // reset the timer to 0:00, paused until Start is pressed
     loadLevel(0);
+  }
+
+  // Finish the current level: move to the next one, or win if it's the last.
+  // Reaching a goal flag OR destroying the slime boss both call this.
+  function completeLevel() {
+    if (currentLevel < levels.length - 1) {
+      currentLevel++;
+      loadLevel(currentLevel);
+    } else {
+      gameWon = true; // that was the last level — you win!
+    }
+  }
+
+  // Leave the title screen and begin a fresh game in the chosen mode
+  // ("normal", "hard", or "superhard").
+  function startGame(chosenMode) {
+    mode = chosenMode;
+    onHomeScreen = false;
+    restartGame(); // start clean: Level 1, timer at 0:00
+  }
+
+  // The player died. What that means depends on the mode:
+  //   normal    -> respawn at the start of the current level
+  //   hard      -> back to Level 1, AND the timer resets
+  //   superhard -> back to Level 1, but the timer keeps running (brutal!)
+  function die() {
+    if (mode === "normal") {
+      loadLevel(currentLevel);
+      return;
+    }
+    currentLevel = 0;
+    if (mode === "hard") restartTimer(); // hard wipes the clock; superhard doesn't
+    loadLevel(0);                        // teleport back to the first level
   }
 
   // ============================================================
@@ -418,22 +515,35 @@
       y: (ev.clientY - r.top) * (canvas.height / r.height),
     };
   }
-  // Is the mouse currently over the Restart button?
-  function overRestartButton(ev) {
+  // Is the mouse currently over the given button rectangle b?
+  function overButton(ev, b) {
     const m = mousePos(ev);
-    const b = RESTART_BTN;
     return (
       m.x >= b.x && m.x <= b.x + b.width &&
       m.y >= b.y && m.y <= b.y + b.height
     );
   }
-  // Click the Restart button (only on the win screen) to play again.
+  // Clicking a button: Start on the home screen, Restart on the win screen.
   canvas.addEventListener("click", (ev) => {
-    if (gameWon && overRestartButton(ev)) restartGame();
+    if (onHomeScreen) {
+      if (overButton(ev, START_BTN)) startGame("normal");
+      else if (overButton(ev, HARDCORE_BTN)) startGame("hard");
+      else if (overButton(ev, SUPER_BTN)) startGame("superhard");
+      else if (overButton(ev, RESET_SCORE_BTN)) resetHighScores();
+    } else if (gameWon && overButton(ev, RESTART_BTN)) {
+      restartGame();
+    }
   });
-  // Show a pointer cursor when hovering the button, so it feels clickable.
+  // Show a pointer cursor when hovering whichever button is on screen.
   canvas.addEventListener("mousemove", (ev) => {
-    canvas.style.cursor = gameWon && overRestartButton(ev) ? "pointer" : "default";
+    const overHome =
+      onHomeScreen &&
+      (overButton(ev, START_BTN) ||
+        overButton(ev, HARDCORE_BTN) ||
+        overButton(ev, SUPER_BTN) ||
+        overButton(ev, RESET_SCORE_BTN));
+    const overRestart = gameWon && overButton(ev, RESTART_BTN);
+    canvas.style.cursor = overHome || overRestart ? "pointer" : "default";
   });
 
   // ============================================================
@@ -464,8 +574,8 @@
   //  UPDATE — runs every frame to move things
   // ============================================================
   function update() {
-    // If the game is won, freeze the action (the win screen shows instead).
-    if (gameWon) return;
+    // Freeze the action while on the title screen or after winning.
+    if (onHomeScreen || gameWon) return;
     // --- Left / right movement ---
     if (keys["ArrowLeft"] || keys["KeyA"]) {
       player.vx = -MOVE_SPEED;
@@ -497,6 +607,7 @@
         width: 16,
         height: 16,
         vx: 8 * player.facing, // flies the way the player is looking
+        vy: -8,                 // tossed upward so it arcs (gravity pulls it down)
       });
     }
     prevThrow = throwPressed;
@@ -545,32 +656,53 @@
       p.y += dy;
     }
 
-    // --- Thrown bombs fly straight ahead and blow up brick walls ---
+    // --- Thrown bombs arc through the air and blow up brick walls ---
     for (let i = thrownBombs.length - 1; i >= 0; i--) {
       const b = thrownBombs[i];
+      b.vy += GRAVITY; // gravity pulls it down each frame, making an arc
       b.x += b.vx;
+      b.y += b.vy;
 
-      // Did it reach a brick wall? If so, destroy the wall and the bomb.
+      // Did it hit the slime boss? That destroys it and wins the level.
+      if (boss && rectsOverlap(b, boss)) {
+        boss = null;
+        thrownBombs.splice(i, 1);
+        completeLevel();
+        return;
+      }
+
+      // Did it reach a brick wall? If so, crumble it into falling bits.
       let hitWall = false;
       for (let j = platforms.length - 1; j >= 0; j--) {
         if (platforms[j].brick && rectsOverlap(b, platforms[j])) {
-          platforms.splice(j, 1); // the wall is gone!
+          crumbleWall(platforms[j]); // spawn tumbling brick pieces
+          platforms.splice(j, 1);    // the wall stops blocking right away
           hitWall = true;
         }
       }
 
       if (hitWall) {
         thrownBombs.splice(i, 1);
-      } else if (b.x < -20 || b.x > canvas.width + 20) {
-        // Flew off-screen without hitting anything — give the bomb back
+      } else if (b.x < -20 || b.x > canvas.width + 20 || b.y > canvas.height + 20) {
+        // Left the screen without hitting anything — give the bomb back
         // so the player can never get permanently stuck.
         player.bombs++;
         thrownBombs.splice(i, 1);
       }
     }
 
-    // The goal counts as solid too, so we handle them all together.
-    const solids = platforms.concat([goal]);
+    // --- Crumbling wall bits: tumble down with gravity, then vanish ---
+    for (let i = brickBits.length - 1; i >= 0; i--) {
+      const bit = brickBits[i];
+      bit.vy += GRAVITY;
+      bit.x += bit.vx;
+      bit.y += bit.vy;
+      bit.spin += bit.vspin; // just for the drawing
+      if (bit.y > canvas.height + 40) brickBits.splice(i, 1);
+    }
+
+    // The goal (if the level has one) counts as solid too.
+    const solids = goal ? platforms.concat([goal]) : platforms.slice();
 
     // --- Horizontal movement, then stop at any wall we run into ---
     // We move on the X axis first and resolve side collisions separately
@@ -613,7 +745,7 @@
 
     // --- Fell in the lava (or off the bottom)? Restart this level. ---
     if ((lava && rectsOverlap(player, lava)) || player.y > canvas.height) {
-      loadLevel(currentLevel); // respawn at the start of this level
+      die();  // respawn — or, in hardcore mode, back to Level 1
       return; // we just respawned, so skip the rest of this frame
     }
 
@@ -625,10 +757,35 @@
         e.x = e.maxX - e.width;
         e.dir = -1;
       }
-      if (rectsOverlap(player, e)) { // touched the alien? back to the start
-        loadLevel(currentLevel);
+      if (rectsOverlap(player, e)) { // touched the alien?
+        die();
         return;
       }
+    }
+
+    // --- The slime boss: deadly to touch, and it shoots slime balls ---
+    if (boss) {
+      if (rectsOverlap(player, boss)) { die(); return; } // touching it kills you
+      // Fire a slime ball toward the player every so often.
+      boss.shootTimer = (boss.shootTimer || 0) + 1;
+      if (boss.shootTimer >= boss.shootInterval) {
+        boss.shootTimer = 0;
+        slimeBalls.push({
+          x: boss.x - 16,
+          y: boss.y + boss.height * 0.45,
+          width: 16,
+          height: 16,
+          vx: -5, // flies left, toward where the player approaches from
+        });
+      }
+    }
+
+    // --- Slime balls fly across and kill the player on contact ---
+    for (let i = slimeBalls.length - 1; i >= 0; i--) {
+      const s = slimeBalls[i];
+      s.x += s.vx;
+      if (rectsOverlap(player, s)) { die(); return; }
+      if (s.x < -20 || s.x > canvas.width + 20) slimeBalls.splice(i, 1);
     }
 
     // --- Pick up items (like bombs) by walking over them ---
@@ -640,14 +797,7 @@
     }
 
     // --- Reached the goal? (i.e. we landed on the gold platform) ---
-    if (reachedGoal) {
-      if (currentLevel < levels.length - 1) {
-        currentLevel++;
-        loadLevel(currentLevel); // on to the next level!
-      } else {
-        gameWon = true; // that was the last level — you win!
-      }
-    }
+    if (reachedGoal) completeLevel();
   }
 
   // ============================================================
@@ -657,6 +807,12 @@
     // Clear the previous frame.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     tick++; // move the lava animation along a little each frame
+
+    // On the title screen, draw that instead of the game and stop here.
+    if (onHomeScreen) {
+      drawHomeScreen();
+      return;
+    }
 
     // Draw the lava first (behind everything), if this level has any.
     if (lava) drawLava(lava);
@@ -680,11 +836,23 @@
       }
     }
 
-    // Draw the goal (a gold block with a flag on a pole).
-    drawGoal(goal);
+    // Draw tumbling brick pieces from a wall that just crumbled.
+    for (const bit of brickBits) {
+      ctx.save();
+      ctx.translate(bit.x + bit.width / 2, bit.y + bit.height / 2);
+      ctx.rotate(bit.spin);
+      ctx.fillStyle = "#a8452f";
+      ctx.fillRect(-bit.width / 2, -bit.height / 2, bit.width, bit.height);
+      ctx.restore();
+    }
 
-    // Draw any walking enemies.
+    // Draw the goal (a gold block with a flag on a pole), if there is one.
+    if (goal) drawGoal(goal);
+
+    // Draw any walking enemies, and the slime boss + its slime balls.
     for (const e of enemies) drawEnemy(e);
+    if (boss) drawBoss(boss);
+    for (const s of slimeBalls) drawSlimeBall(s);
 
     // Draw bomb pickups sitting in the level, and any bombs in the air.
     for (const it of items) {
@@ -709,6 +877,12 @@
     ctx.font = "bold 20px sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("Level " + (currentLevel + 1), 16, 30);
+
+    // Flag the hardcore modes right below so you can't forget the stakes.
+    if (mode !== "normal") {
+      ctx.fillStyle = "#c0392b";
+      ctx.fillText(mode === "superhard" ? "SUPER HARDCORE" : "HARDCORE", 16, 52);
+    }
 
     // If the game is won, cover the screen with a win message + button.
     if (gameWon) {
@@ -783,11 +957,55 @@
     }
   }
 
+  // Break a brick wall into a grid of small pieces that pop and tumble away.
+  function crumbleWall(w) {
+    const size = 20;
+    for (let y = w.y; y < w.y + w.height; y += size) {
+      for (let x = w.x; x < w.x + w.width; x += size) {
+        brickBits.push({
+          x,
+          y,
+          width: Math.min(size - 2, w.x + w.width - x),
+          height: Math.min(size - 2, w.y + w.height - y),
+          vx: (Math.random() - 0.5) * 6, // fly left or right a bit
+          vy: -Math.random() * 4 - 1,    // pop upward, then gravity takes over
+          spin: 0,
+          vspin: (Math.random() - 0.5) * 0.3, // tumble as it falls
+        });
+      }
+    }
+  }
+
   // Draws the purple alien from its pixel grid, mirrored to face the way
   // it's walking (so its eyes look in the direction it moves).
   function drawEnemy(e) {
     const faceLeft = e.dir < 0;
     drawPixelSprite(ENEMY_SPRITE, ENEMY_COLORS, e.x, e.y, e.width, e.height, faceLeft);
+  }
+
+  // Draws the slime boss from its pixel grid, with a gentle wobble.
+  function drawBoss(bo) {
+    const wobble = Math.sin(tick * 0.1) * 2; // squishy side-to-side sway
+    drawPixelSprite(SLIME_SPRITE, SLIME_COLORS, bo.x + wobble, bo.y, bo.width, bo.height);
+  }
+
+  // Draws a slime ball: a round green glob with a lighter shine.
+  function drawSlimeBall(s) {
+    const cx = s.x + s.width / 2;
+    const cy = s.y + s.height / 2;
+    const r = s.width / 2;
+    ctx.fillStyle = "#33501f"; // dark rim
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6ab04c"; // green body
+    ctx.beginPath();
+    ctx.arc(cx, cy, r - 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#9bd66f"; // shine
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // Draws a goal: a gold platform with a pixel-art flag standing on it.
@@ -844,6 +1062,48 @@
     drawPixelSprite(sprite, SPRITE_COLORS, player.x, player.y, player.width, drawHeight);
   }
 
+  // Draws the title / home screen: the game name, the alien, and a Start
+  // button. Shown until the player clicks Start.
+  function drawHomeScreen() {
+    // Sky background with a ground strip along the bottom.
+    ctx.fillStyle = "#87ceeb";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0f3460";
+    ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+
+    // The alien, drawn near the top (small, to leave room for buttons).
+    drawPixelSprite(SPRITE_COILED, SPRITE_COLORS, canvas.width / 2 - 28, 106, 56, 84);
+
+    // The title, with a little dark shadow behind it so it pops.
+    ctx.textAlign = "center";
+    ctx.font = "bold 52px sans-serif";
+    ctx.fillStyle = "#16213e";
+    ctx.fillText("SPRING ALIEN", canvas.width / 2 + 3, 88);
+    ctx.fillStyle = "#ffd700";
+    ctx.fillText("SPRING ALIEN", canvas.width / 2, 85);
+
+    // Three ways to play, plus a button to wipe all the best times.
+    drawButton(START_BTN, "Start", "#e94560");
+    drawButton(HARDCORE_BTN, "Hardcore", "#7a1f2b");
+    drawButton(SUPER_BTN, "Super Hardcore", "#4a0e1a");
+    drawButton(RESET_SCORE_BTN, "Reset High Score", "#2a6f97");
+  }
+
+  // Draws a labeled button rectangle (bg color) with a white outline.
+  function drawButton(b, label, bg) {
+    ctx.fillStyle = bg;
+    ctx.fillRect(b.x, b.y, b.width, b.height);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(b.x, b.y, b.width, b.height);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 26px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2 + 1);
+    ctx.textBaseline = "alphabetic"; // reset so other text isn't affected
+  }
+
   // ============================================================
   //  THE TIMER
   // ============================================================
@@ -869,17 +1129,17 @@
   }
   // Read/write the best time from the browser's storage. Wrapped in
   // try/catch because some browsers block storage when opened as a file.
-  function loadBest() {
+  function loadBest(key) {
     try {
-      const v = localStorage.getItem("bestTimeMs");
+      const v = localStorage.getItem(key);
       return v !== null ? Number(v) : null;
     } catch (e) {
       return null;
     }
   }
-  function saveBest(ms) {
+  function saveBest(key, ms) {
     try {
-      localStorage.setItem("bestTimeMs", String(Math.round(ms)));
+      localStorage.setItem(key, String(Math.round(ms)));
     } catch (e) {
       /* storage not available — the best time just won't persist */
     }
@@ -894,16 +1154,46 @@
     timerEl.textContent = "Time: " + formatTime(elapsedMs);
 
     // The frame we FIRST win, check for a new best time (only if the timer
-    // was actually running — otherwise it's not a real timed run).
+    // was actually running). Each mode keeps its own separate record.
     if (gameWon && !prevGameWon && timerRunning) {
-      if (bestMs === null || elapsedMs < bestMs) {
-        bestMs = elapsedMs;
-        saveBest(bestMs);
-      }
+      const best = currentBest();
+      if (best === null || elapsedMs < best) setCurrentBest(elapsedMs);
     }
     prevGameWon = gameWon;
 
-    bestEl.textContent = "Best: " + (bestMs === null ? "--" : formatTime(bestMs));
+    // Show the best time for whichever mode we're in, clearly labeled.
+    const labels = {
+      normal: "Best: ",
+      hard: "Best (Hardcore): ",
+      superhard: "Best (Super Hardcore): ",
+    };
+    const best = currentBest();
+    bestEl.textContent = labels[mode] + (best === null ? "--" : formatTime(best));
+  }
+
+  // Read/update the best time for whichever mode we're currently playing.
+  function currentBest() {
+    if (mode === "superhard") return bestSuperMs;
+    if (mode === "hard") return bestHardMs;
+    return bestNormalMs;
+  }
+  function setCurrentBest(ms) {
+    if (mode === "superhard") { bestSuperMs = ms; saveBest("bestTimeSuperMs_v2", ms); }
+    else if (mode === "hard") { bestHardMs = ms; saveBest("bestTimeHardMs_v2", ms); }
+    else { bestNormalMs = ms; saveBest("bestTimeMs_v2", ms); }
+  }
+  // Wipe every mode's best time (memory + saved storage) back to "--".
+  function resetHighScores() {
+    bestNormalMs = null;
+    bestHardMs = null;
+    bestSuperMs = null;
+    try {
+      localStorage.removeItem("bestTimeMs_v2");
+      localStorage.removeItem("bestTimeHardMs_v2");
+      localStorage.removeItem("bestTimeSuperMs_v2");
+    } catch (e) {
+      /* storage not available — nothing was saved anyway */
+    }
   }
 
   // Wire the Restart button — it resets the ENTIRE game (back to Level 1)
