@@ -197,6 +197,21 @@
     "SSSSSSSSSSS", // flat bottom, sitting on the ground
   ];
 
+  // A little slime ball the boss shoots.  S = green, D = dark edge, L = shine
+  const SLIMEBALL_COLORS = {
+    S: "#6ab04c",
+    D: "#33501f",
+    L: "#9bd66f",
+  };
+  const SLIMEBALL_SPRITE = [
+    ".DDDD.",
+    "DSSSSD",
+    "DLSSSD", // L = shiny spot
+    "DSSSSD",
+    "DSSSSD",
+    ".DDDD.",
+  ];
+
   // ============================================================
   //  THE GOAL FLAG SPRITE (a pixel pennant on a pole)
   // ============================================================
@@ -636,17 +651,20 @@
     }
 
     // --- Moving platforms: slide back and forth, carrying any rider ---
+    // Super hardcore makes them move twice as fast with NO pause at the ends.
+    const superFast = mode === "superhard";
     for (const p of platforms) {
       if (!p.move) continue;
 
       // Pausing at an end? Count down and stay still this frame.
       if (p.wait > 0) { p.wait--; continue; }
 
+      const speed = p.speed * (superFast ? 2 : 1);
       const pos = p.axis === "x" ? p.x : p.y;   // position along its track
-      let next = pos + p.speed * p.dir;
-      // Reached an end: clamp there, turn around, and pause for a moment.
-      if (next <= p.min) { next = p.min; p.dir = 1;  p.wait = PLATFORM_PAUSE; }
-      if (next >= p.max) { next = p.max; p.dir = -1; p.wait = PLATFORM_PAUSE; }
+      let next = pos + speed * p.dir;
+      // Reached an end: clamp there, turn around, and pause (unless super).
+      if (next <= p.min) { next = p.min; p.dir = 1;  if (!superFast) p.wait = PLATFORM_PAUSE; }
+      if (next >= p.max) { next = p.max; p.dir = -1; if (!superFast) p.wait = PLATFORM_PAUSE; }
       const delta = next - pos;
       const dx = p.axis === "x" ? delta : 0;
       const dy = p.axis === "y" ? delta : 0;
@@ -989,23 +1007,9 @@
     drawPixelSprite(SLIME_SPRITE, SLIME_COLORS, bo.x + wobble, bo.y, bo.width, bo.height);
   }
 
-  // Draws a slime ball: a round green glob with a lighter shine.
+  // Draws a slime ball from its little pixel grid.
   function drawSlimeBall(s) {
-    const cx = s.x + s.width / 2;
-    const cy = s.y + s.height / 2;
-    const r = s.width / 2;
-    ctx.fillStyle = "#33501f"; // dark rim
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#6ab04c"; // green body
-    ctx.beginPath();
-    ctx.arc(cx, cy, r - 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#9bd66f"; // shine
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.3, cy - r * 0.3, r * 0.3, 0, Math.PI * 2);
-    ctx.fill();
+    drawPixelSprite(SLIMEBALL_SPRITE, SLIMEBALL_COLORS, s.x, s.y, s.width, s.height);
   }
 
   // Draws a goal: a gold platform with a pixel-art flag standing on it.
