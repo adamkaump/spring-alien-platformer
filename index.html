@@ -366,6 +366,26 @@
         shootInterval: 100, // frames between slime-ball shots
       },
     },
+    {
+      // Level 9: a BRUTAL trap gauntlet! The screen scrolls as you hop
+      // across rickety platforms over the lava. Every platform after the
+      // start drops the instant you land — there are no safe rests, so you
+      // can never stop moving until you reach the goal at the far end!
+      worldWidth: 2850, // much wider than one screen (800) — it scrolls
+      start: { x: 40, y: 300 },
+      platforms: [
+        { x: 20,   y: 360, width: 120, height: 20 },              // safe start
+        { x: 360,  y: 360, width: 100, height: 20, falls: true }, // everything
+        { x: 680,  y: 360, width: 100, height: 20, falls: true }, // from here
+        { x: 1000, y: 360, width: 100, height: 20, falls: true }, // on is
+        { x: 1320, y: 360, width: 100, height: 20, falls: true }, // rickety —
+        { x: 1640, y: 360, width: 100, height: 20, falls: true }, // no rests,
+        { x: 1960, y: 360, width: 100, height: 20, falls: true }, // keep
+        { x: 2280, y: 360, width: 100, height: 20, falls: true }, // moving!
+      ],
+      goal: { x: 2600, y: 340, width: 140, height: 20 },
+      lava: { x: 0, y: 420, width: 2850, height: 30 },
+    },
   ];
 
   // Which level we're on, and whether the whole game has been won.
@@ -414,6 +434,10 @@
   let thrownBombs = []; // bombs currently flying through the air
   let prevThrow = false; // was the throw key down last frame? (one throw per press)
   let tick = 0;       // counts frames, used to animate the lava
+  // Camera: most levels are exactly one screen wide (800), but a big level
+  // can be wider. cameraX is how far the view has scrolled to the right.
+  let worldWidth = 800;
+  let cameraX = 0;
 
   // Set up a level: place the player at the start and load its platforms.
   function loadLevel(index) {
@@ -432,6 +456,10 @@
     // Fresh copies of the pickups, and clear any bombs / carried items.
     items = (level.items || []).map((it) => ({ ...it }));
     thrownBombs = [];
+    // How wide the level is (defaults to one screen). The camera can scroll
+    // across anything wider than the screen.
+    worldWidth = level.worldWidth || 800;
+    cameraX = 0;
     player.bombs = 0;
     player.facing = 1;
     player.x = level.start.x;
@@ -735,10 +763,10 @@
         }
       }
     }
-    // Keep the player inside the left/right edges of the canvas.
+    // Keep the player inside the left/right edges of the whole level.
     if (player.x < 0) player.x = 0;
-    if (player.x + player.width > canvas.width) {
-      player.x = canvas.width - player.width;
+    if (player.x + player.width > worldWidth) {
+      player.x = worldWidth - player.width;
     }
 
     // --- Vertical movement, then stop on floors and ceilings ---
@@ -832,6 +860,16 @@
       return;
     }
 
+    // Scroll the camera to keep the player centered, clamped to the level's
+    // width. On one-screen levels worldWidth === 800, so this stays at 0.
+    const targetCam = player.x + player.width / 2 - canvas.width / 2;
+    cameraX = Math.max(0, Math.min(targetCam, worldWidth - canvas.width));
+
+    // Shift everything in the WORLD by the camera so wide levels scroll
+    // smoothly. The HUD is drawn later, after we undo this shift.
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+
     // Draw the lava first (behind everything), if this level has any.
     if (lava) drawLava(lava);
 
@@ -880,6 +918,10 @@
 
     // Draw the player from its pixel-art grid.
     drawPlayer();
+
+    // Done drawing the world — undo the camera shift so the HUD below is
+    // positioned on the fixed screen, not in the scrolling world.
+    ctx.restore();
 
     // Show how many bombs the player is carrying, in the top-right corner.
     if (player.bombs > 0) {
