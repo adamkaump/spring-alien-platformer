@@ -65,6 +65,31 @@
     <button id="restartBtn">Restart</button>
   </div>
 
+  <!-- Firebase library (loads the "compat" version so we can use a simple
+       global `firebase` object without any build tools). -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
+  <script>
+  // ============================================================
+  //  SHARED LEADERBOARD SETUP (Firebase)
+  // ============================================================
+  // ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE ▼▼▼
+  // Get this from the Firebase console: Project settings → "Your apps" →
+  // the little </> web app → "SDK setup and configuration" → Config.
+  // Until you paste in a real config, the leaderboard just works LOCALLY
+  // (only on this computer). Once you paste it in, scores are shared with
+  // everyone who plays!
+  const firebaseConfig = {
+    apiKey: "PASTE_YOUR_API_KEY",
+    authDomain: "PASTE_YOUR_PROJECT.firebaseapp.com",
+    databaseURL: "https://PASTE_YOUR_PROJECT-default-rtdb.firebaseio.com",
+    projectId: "PASTE_YOUR_PROJECT",
+    appId: "PASTE_YOUR_APP_ID",
+  };
+  // ▲▲▲ PASTE YOUR FIREBASE CONFIG HERE ▲▲▲
+  </script>
+
   <script>
   // ============================================================
   //  SETUP
@@ -86,6 +111,69 @@
   const FALL_DELAY = 18;
   // How long a moving platform pauses at each end (in frames, ~60 = 1 sec).
   const PLATFORM_PAUSE = 60;
+
+  // ============================================================
+  //  SOUND EFFECTS (made with the Web Audio API — no sound files!)
+  // ============================================================
+  // One shared "audio machine" for the whole game. Browsers only let sound
+  // play after the player clicks, so we create it the first time it's needed.
+  let audioCtx = null;
+  function getAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+
+  // Play one beep: pitch `freq` (Hz) for `dur` seconds. `type` is the wave
+  // shape ("square" is beepy, "sine"/"sawtooth" are other flavors). If
+  // `slideTo` is given, the pitch slides from freq to slideTo (zoops & zaps).
+  function tone(freq, dur, type = "square", vol = 0.2, slideTo = null) {
+    const ac = getAudio();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ac.currentTime);
+    if (slideTo) {
+      osc.frequency.exponentialRampToValueAtTime(slideTo, ac.currentTime + dur);
+    }
+    // Fade the volume to (almost) zero so the note doesn't click when it ends.
+    gain.gain.setValueAtTime(vol, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    osc.connect(gain).connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + dur);
+  }
+
+  // A short burst of static (white noise) — used for whooshes and explosions.
+  function noise(dur, vol = 0.2) {
+    const ac = getAudio();
+    const buffer = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(vol, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    src.connect(gain).connect(ac.destination);
+    src.start();
+  }
+
+  // Named sound effects, each built from the little tools above.
+  const SFX = {
+    jump()    { tone(300, 0.18, "square", 0.2, 720); },              // boingy zoop up
+    throwIt() { noise(0.15, 0.15); },                               // whoosh
+    pickup()  { tone(660, 0.1, "square", 0.2);
+                setTimeout(() => tone(990, 0.12, "square", 0.2), 90); }, // happy ding-ding
+    explode() { noise(0.35, 0.3); tone(120, 0.35, "sawtooth", 0.25, 40); }, // boom
+    spit()    { tone(200, 0.12, "square", 0.12, 90); },             // slime spat out
+    die()     { tone(400, 0.5, "sawtooth", 0.25, 80); },            // sad slide down
+    levelUp() { tone(523, 0.12, "square", 0.2);
+                setTimeout(() => tone(784, 0.16, "square", 0.2), 110); }, // next-level chime
+    win()     { [523, 659, 784, 1047].forEach((f, i) =>
+                  setTimeout(() => tone(f, 0.2, "square", 0.2), i * 120)); }, // victory tune
+  };
 
   // The player is just a rectangle for now. x/y is its top-left corner.
   // vx/vy are its velocity (how far it moves each frame).
@@ -185,6 +273,13 @@
     W: "#ffffff",
     E: "#1a1a1a",
   };
+  // A purple version of the same slime, used by the Level 10 boss.
+  const SLIME_COLORS_PURPLE = {
+    S: "#9b3ff2",
+    D: "#4a1a7a",
+    W: "#ffffff",
+    E: "#1a1a1a",
+  };
   const SLIME_SPRITE = [
     "...SSSSS...", // rounded top of the blob
     "..SSSSSSS..",
@@ -202,6 +297,12 @@
     S: "#6ab04c",
     D: "#33501f",
     L: "#9bd66f",
+  };
+  // Purple slime balls for the purple boss.
+  const SLIMEBALL_COLORS_PURPLE = {
+    S: "#9b3ff2",
+    D: "#4a1a7a",
+    L: "#c07bff",
   };
   const SLIMEBALL_SPRITE = [
     ".DDDD.",
@@ -386,6 +487,29 @@
       goal: { x: 2600, y: 340, width: 140, height: 20 },
       lava: { x: 0, y: 420, width: 2850, height: 30 },
     },
+    {
+      // Level 10: another BOSS FIGHT, like Level 8 — but this slime is
+      // PURPLE and fires slime balls MUCH faster. Ride the lift up to the
+      // bomb, dodge the barrage, and throw it at the slime to win!
+      start: { x: 40, y: 300 },
+      platforms: [
+        { x: 0, y: 410, width: 800, height: 40 }, // ground
+        { x: 110, y: 360, width: 70, height: 16,
+          move: true, axis: "y", speed: 2, dir: -1, min: 170, max: 360 }, // lift
+        { x: 200, y: 180, width: 170, height: 16 }, // high platform (bomb)
+      ],
+      items: [
+        { x: 270, y: 160, width: 20, height: 20, type: "bomb" },
+      ],
+      boss: {
+        x: 660, y: 300, width: 100, height: 110,
+        variant: "purple",  // this slime is purple
+        // No shootInterval — this boss doesn't throw slime balls. Instead it
+        // SHOOTS whole slimes that fly straight at the player, about once a
+        // second, up to 6 at once.
+        spawnInterval: 60,
+      },
+    },
   ];
 
   // Which level we're on, and whether the whole game has been won.
@@ -398,19 +522,24 @@
   //   "superhard" dying sends you to Level 1 but the timer keeps running
   let mode = "normal";
 
-  // Buttons (each an x, y, width, height rectangle): three on the home
-  // screen, and Restart on the win screen.
-  const START_BTN = { x: 280, y: 210, width: 240, height: 42 };
-  const HARDCORE_BTN = { x: 280, y: 258, width: 240, height: 42 };
-  const SUPER_BTN = { x: 280, y: 306, width: 240, height: 42 };
-  const RESET_SCORE_BTN = { x: 280, y: 360, width: 240, height: 38 };
-  const RESTART_BTN = { x: 300, y: 250, width: 200, height: 56 };
+  // Buttons (each an x, y, width, height rectangle): the home-screen buttons
+  // run down the LEFT side (the leaderboard fills the right), and Restart is
+  // on the win screen.
+  const START_BTN = { x: 40, y: 118, width: 250, height: 46 };
+  const HARDCORE_BTN = { x: 40, y: 174, width: 250, height: 46 };
+  const SUPER_BTN = { x: 40, y: 230, width: 250, height: 46 };
+  const CHANGE_NAME_BTN = { x: 40, y: 294, width: 250, height: 38 };
+  const RESET_SCORE_BTN = { x: 40, y: 342, width: 250, height: 38 };
+  // Win-screen buttons, side by side under the leaderboard.
+  const RESTART_BTN = { x: 200, y: 388, width: 180, height: 48 };
+  const MENU_BTN = { x: 420, y: 388, width: 180, height: 48 };
 
   // Timer shown beneath the game, controlled by the Start / Restart buttons.
   const timerEl = document.getElementById("timer");
   let timerRunning = false; // is the timer counting right now?
   let elapsedMs = 0;        // how much time has been counted so far
   let startTime = 0;        // performance.now() that lines up with elapsed = 0
+  let cheatTime = false;    // used a level-warp cheat? then show a silly 99:99
 
   // Best (fastest) finish times, kept separately for normal and hardcore
   // modes. loadBest() reads them from the browser's storage so they're
@@ -420,6 +549,27 @@
   let bestHardMs = loadBest("bestTimeHardMs_v2");
   let bestSuperMs = loadBest("bestTimeSuperMs_v2");
   let prevGameWon = false; // was the game already won last frame?
+
+  // ---- The player's name (for the leaderboard) ----
+  // Each player types a 5-letter name once; it's saved so they don't have to
+  // type it again next time. `enteringName` is true while typing it in.
+  let playerName = loadPlayerName();  // null the very first time
+  let nameInput = "";                 // the letters typed so far on the name screen
+  let enteringName = false;
+  // First-ever visit (no saved name)? Send them to the name screen first.
+  if (!playerName) { enteringName = true; onHomeScreen = false; }
+
+  // ---- The leaderboard: top 3 fastest finishes for each mode ----
+  // Each entry is { name, ms }. Kept sorted fastest-first, saved in storage.
+  const MODES = ["normal", "hard", "superhard"];
+  const MODE_TITLES = { normal: "NORMAL", hard: "HARDCORE", superhard: "SUPER HARDCORE" };
+  let leaderboard = loadLeaderboard(); // local scores, used until/unless Firebase connects
+
+  // The SHARED online leaderboard (Firebase). Stays off until a real config
+  // is pasted in up top; then scores are shared with everyone who plays.
+  let firebaseDB = null;
+  let firebaseReady = false;
+  initFirebase();
 
   // These hold the platforms/goal/lava for the level we're playing now.
   // loadLevel() fills them in.
@@ -482,16 +632,30 @@
   // Reaching a goal flag OR destroying the slime boss both call this.
   function completeLevel() {
     if (currentLevel < levels.length - 1) {
+      SFX.levelUp();
       currentLevel++;
       loadLevel(currentLevel);
     } else {
+      SFX.win();
       gameWon = true; // that was the last level — you win!
+      // Record the finish on the leaderboard right away.
+      if (cheatTime) {
+        // Warped here with a cheat — you still get on the board, but with the
+        // goofy 99:99 time, so it sorts to the very bottom.
+        addScore(mode, playerName || "-----", Number.MAX_SAFE_INTEGER, true);
+      } else {
+        if (timerRunning) elapsedMs = performance.now() - startTime; // final time
+        const best = currentBest();
+        if (best === null || elapsedMs < best) setCurrentBest(elapsedMs);
+        addScore(mode, playerName || "-----", elapsedMs, false);
+      }
     }
   }
 
   // Leave the title screen and begin a fresh game in the chosen mode
   // ("normal", "hard", or "superhard").
   function startGame(chosenMode) {
+    getAudio().resume(); // wake up the sound system (browsers need a click first)
     mode = chosenMode;
     onHomeScreen = false;
     restartGame(); // start clean: Level 1, timer at 0:00
@@ -502,6 +666,7 @@
   //   hard      -> back to Level 1, AND the timer resets
   //   superhard -> back to Level 1, but the timer keeps running (brutal!)
   function die() {
+    SFX.die();
     if (mode === "normal") {
       loadLevel(currentLevel);
       return;
@@ -525,23 +690,49 @@
     keys[e.code] = false;
   });
 
-  // --- Secret level warp: tap "a", then a number (1-9), to jump levels ---
+  // --- Secret level warp: tap "a", then a number (1-9, or 0), to jump levels ---
   // We remember when "a" was just pressed. If the next key is a number,
   // we treat it as a warp code instead of normal typing.
+  // "1"-"9" go to levels 1-9, and "0" goes to level 10.
   let warpArmed = false;
   document.addEventListener("keydown", (e) => {
+    if (onHomeScreen || enteringName) { warpArmed = false; return; } // menus only
     if (e.code === "KeyA") {
       warpArmed = true; // "a" starts the combo (it still moves left too)
-    } else if (warpArmed && e.key >= "1" && e.key <= "9") {
-      const index = Number(e.key) - 1; // "1" is the first level
+    } else if (warpArmed && e.key >= "0" && e.key <= "9") {
+      // "0" means level 10 (index 9); otherwise "1" is the first level.
+      const index = e.key === "0" ? 9 : Number(e.key) - 1;
       if (index < levels.length) {
         currentLevel = index;
         gameWon = false;       // in case we'd already won
+        cheatTime = true;      // warping is cheating — show the goofy 99:99 time
+        timerRunning = false;  // and stop the real clock
         loadLevel(currentLevel);
       }
       warpArmed = false;
     } else {
       warpArmed = false; // any other key cancels the combo
+    }
+  });
+
+  // --- Typing your 5-letter name on the name-entry screen ---
+  document.addEventListener("keydown", (e) => {
+    if (!enteringName) return; // only listen while the name screen is up
+    if (/^[a-zA-Z0-9]$/.test(e.key)) {
+      if (nameInput.length < 5) nameInput += e.key.toUpperCase(); // add a letter or number
+    } else if (e.key === "Backspace") {
+      nameInput = nameInput.slice(0, -1); // erase the last letter
+      e.preventDefault();
+    } else if (e.key === "Enter" && nameInput.length === 5) {
+      savePlayerName(nameInput); // all 5 letters in — lock it in
+      nameInput = "";
+      enteringName = false;
+      onHomeScreen = true;
+    } else if (e.key === "Escape" && playerName) {
+      // Changed your mind? If you already had a name, go back to the menu.
+      nameInput = "";
+      enteringName = false;
+      onHomeScreen = true;
     }
   });
 
@@ -572,9 +763,16 @@
       if (overButton(ev, START_BTN)) startGame("normal");
       else if (overButton(ev, HARDCORE_BTN)) startGame("hard");
       else if (overButton(ev, SUPER_BTN)) startGame("superhard");
+      else if (overButton(ev, CHANGE_NAME_BTN)) {
+        nameInput = ""; enteringName = true; onHomeScreen = false; // retype name
+      }
       else if (overButton(ev, RESET_SCORE_BTN)) resetHighScores();
-    } else if (gameWon && overButton(ev, RESTART_BTN)) {
-      restartGame();
+    } else if (gameWon) {
+      if (overButton(ev, RESTART_BTN)) restartGame();
+      else if (overButton(ev, MENU_BTN)) {
+        gameWon = false;
+        onHomeScreen = true; // back to the title screen (and its leaderboard)
+      }
     }
   });
   // Show a pointer cursor when hovering whichever button is on screen.
@@ -584,9 +782,11 @@
       (overButton(ev, START_BTN) ||
         overButton(ev, HARDCORE_BTN) ||
         overButton(ev, SUPER_BTN) ||
+        overButton(ev, CHANGE_NAME_BTN) ||
         overButton(ev, RESET_SCORE_BTN));
-    const overRestart = gameWon && overButton(ev, RESTART_BTN);
-    canvas.style.cursor = overHome || overRestart ? "pointer" : "default";
+    const overWin = gameWon &&
+      (overButton(ev, RESTART_BTN) || overButton(ev, MENU_BTN));
+    canvas.style.cursor = overHome || overWin ? "pointer" : "default";
   });
 
   // ============================================================
@@ -636,6 +836,7 @@
     if (jumpPressed && player.onGround) {
       player.vy = -JUMP_STRENGTH; // negative = upward
       player.onGround = false;
+      SFX.jump();
     }
 
     // --- Throwing a bomb (press F), but only if we're carrying one ---
@@ -644,6 +845,7 @@
     const throwPressed = keys["KeyF"];
     if (throwPressed && !prevThrow && player.bombs > 0) {
       player.bombs--;
+      SFX.throwIt();
       thrownBombs.push({
         x: player.x + player.width / 2 - 8,
         y: player.y + player.height / 2 - 8,
@@ -713,6 +915,7 @@
       if (boss && rectsOverlap(b, boss)) {
         boss = null;
         thrownBombs.splice(i, 1);
+        SFX.explode();
         completeLevel();
         return;
       }
@@ -724,6 +927,7 @@
           crumbleWall(platforms[j]); // spawn tumbling brick pieces
           platforms.splice(j, 1);    // the wall stops blocking right away
           hitWall = true;
+          SFX.explode();
         }
       }
 
@@ -795,8 +999,35 @@
       return; // we just respawned, so skip the rest of this frame
     }
 
-    // --- Enemies pace back and forth, and are deadly to touch ---
-    for (const e of enemies) {
+    // --- Enemies are deadly to touch. Most pace back and forth, but
+    //     "flying" slimes (shot by a boss) sail straight at the player. ---
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (e.fly) {
+        e.x += e.vx; // sail toward wherever the player was aimed
+        e.y += e.vy;
+        if (rectsOverlap(player, e)) { die(); return; }
+        // Hit a surface? Stop flying, land on top of it, and start walking
+        // back and forth along that surface like a normal slime.
+        for (const p of platforms) {
+          if (rectsOverlap(e, p)) {
+            e.fly = false;
+            e.y = p.y - e.height;         // sit on top of the surface
+            e.speed = 2.2;
+            e.dir = e.vx < 0 ? -1 : 1;    // keep heading the way it was going
+            e.minX = p.x;                 // pace across this platform
+            e.maxX = p.x + p.width;
+            break;
+          }
+        }
+        if (!e.fly) continue; // it just landed — walk it starting next frame
+        // Still flying: once it flies off any edge, remove it.
+        if (e.x < -40 || e.x > worldWidth + 40 ||
+            e.y < -40 || e.y > canvas.height + 40) {
+          enemies.splice(i, 1);
+        }
+        continue;
+      }
       e.x += e.speed * e.dir; // walk in the current direction
       if (e.x <= e.minX) { e.x = e.minX; e.dir = 1; }  // hit left edge: turn right
       if (e.x + e.width >= e.maxX) {                    // hit right edge: turn left
@@ -816,13 +1047,48 @@
       boss.shootTimer = (boss.shootTimer || 0) + 1;
       if (boss.shootTimer >= boss.shootInterval) {
         boss.shootTimer = 0;
+        // Aim the slime ball straight at the player: find the direction from
+        // the boss to the player, shrink it to length 1, then scale to speed.
+        const startX = boss.x - 16;
+        const startY = boss.y + boss.height * 0.45;
+        const dx = (player.x + player.width / 2) - startX;
+        const dy = (player.y + player.height / 2) - startY;
+        const dist = Math.hypot(dx, dy) || 1; // avoid divide-by-zero
+        const speed = 5;
         slimeBalls.push({
-          x: boss.x - 16,
-          y: boss.y + boss.height * 0.45,
+          x: startX,
+          y: startY,
           width: 16,
           height: 16,
-          vx: -5, // flies left, toward where the player approaches from
+          vx: (dx / dist) * speed, // fly toward the player, not just left
+          vy: (dy / dist) * speed,
+          variant: boss.variant, // so it's drawn the boss's color
         });
+      }
+
+      // Some bosses SHOOT slimes that fly straight at the player and are
+      // deadly to touch. We cap how many are alive at once so the screen
+      // doesn't fill up with them.
+      if (boss.spawnInterval) {
+        boss.spawnTimer = (boss.spawnTimer || 0) + 1;
+        if (boss.spawnTimer >= boss.spawnInterval && enemies.length < 6) {
+          boss.spawnTimer = 0;
+          SFX.spit();
+          // Aim the slime at the player: get the direction from the boss's
+          // mouth to the player, shrink it to length 1, then scale to speed.
+          const sx = boss.x, sy = boss.y + 20;
+          const dx = (player.x + player.width / 2) - (sx + 17);
+          const dy = (player.y + player.height / 2) - (sy + 17);
+          const dist = Math.hypot(dx, dy) || 1;
+          const spd = 4.5;
+          enemies.push({
+            x: sx, y: sy, width: 34, height: 34,
+            fly: true,                    // this slime flies instead of walking
+            vx: (dx / dist) * spd,
+            vy: (dy / dist) * spd,
+            dir: dx < 0 ? -1 : 1,         // face the way it's flying
+          });
+        }
       }
     }
 
@@ -830,14 +1096,19 @@
     for (let i = slimeBalls.length - 1; i >= 0; i--) {
       const s = slimeBalls[i];
       s.x += s.vx;
+      s.y += (s.vy || 0); // aimed balls also move up/down
       if (rectsOverlap(player, s)) { die(); return; }
-      if (s.x < -20 || s.x > canvas.width + 20) slimeBalls.splice(i, 1);
+      // Remove it once it flies off any edge of the screen.
+      if (s.x < -20 || s.x > canvas.width + 20 ||
+          s.y < -20 || s.y > canvas.height + 20) {
+        slimeBalls.splice(i, 1);
+      }
     }
 
     // --- Pick up items (like bombs) by walking over them ---
     for (let i = items.length - 1; i >= 0; i--) {
       if (rectsOverlap(player, items[i])) {
-        if (items[i].type === "bomb") player.bombs++;
+        if (items[i].type === "bomb") { player.bombs++; SFX.pickup(); }
         items.splice(i, 1); // it's collected, remove it from the level
       }
     }
@@ -853,6 +1124,12 @@
     // Clear the previous frame.
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     tick++; // move the lava animation along a little each frame
+
+    // Typing in a name? Draw that screen and stop here.
+    if (enteringName) {
+      drawNameEntry();
+      return;
+    }
 
     // On the title screen, draw that instead of the game and stop here.
     if (onHomeScreen) {
@@ -944,28 +1221,23 @@
       ctx.fillText(mode === "superhard" ? "SUPER HARDCORE" : "HARDCORE", 16, 52);
     }
 
-    // If the game is won, cover the screen with a win message + button.
+    // If the game is won, cover the screen with a win message, the
+    // leaderboard, and buttons to play again or go back to the menu.
     if (gameWon) {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.fillStyle = "#ffd700";
-      ctx.font = "bold 48px sans-serif";
+      ctx.font = "bold 34px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("You Win! 🏆", canvas.width / 2, 180);
+      ctx.fillText("You Win! 🏆", canvas.width / 2, 34);
 
-      // The clickable "Restart" button.
-      const b = RESTART_BTN;
-      ctx.fillStyle = "#e94560";
-      ctx.fillRect(b.x, b.y, b.width, b.height);
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(b.x, b.y, b.width, b.height);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 26px sans-serif";
-      ctx.textBaseline = "middle";
-      ctx.fillText("Restart", b.x + b.width / 2, b.y + b.height / 2 + 2);
-      ctx.textBaseline = "alphabetic"; // reset so other text isn't affected
+      // The whole leaderboard, centered, so you see your fresh score.
+      drawLeaderboard(169, 48, 462, 312);
+
+      // Two buttons: play again, or back to the menu.
+      drawButton(RESTART_BTN, "Play Again", "#e94560");
+      drawButton(MENU_BTN, "Menu", "#2a6f97");
     }
   }
 
@@ -1044,14 +1316,17 @@
   }
 
   // Draws the slime boss from its pixel grid, with a gentle wobble.
+  // Purple bosses use the purple palette; everyone else is green.
   function drawBoss(bo) {
     const wobble = Math.sin(tick * 0.1) * 2; // squishy side-to-side sway
-    drawPixelSprite(SLIME_SPRITE, SLIME_COLORS, bo.x + wobble, bo.y, bo.width, bo.height);
+    const colors = bo.variant === "purple" ? SLIME_COLORS_PURPLE : SLIME_COLORS;
+    drawPixelSprite(SLIME_SPRITE, colors, bo.x + wobble, bo.y, bo.width, bo.height);
   }
 
-  // Draws a slime ball from its little pixel grid.
+  // Draws a slime ball from its little pixel grid (green or purple).
   function drawSlimeBall(s) {
-    drawPixelSprite(SLIMEBALL_SPRITE, SLIMEBALL_COLORS, s.x, s.y, s.width, s.height);
+    const colors = s.variant === "purple" ? SLIMEBALL_COLORS_PURPLE : SLIMEBALL_COLORS;
+    drawPixelSprite(SLIMEBALL_SPRITE, colors, s.x, s.y, s.width, s.height);
   }
 
   // Draws a goal: a gold platform with a pixel-art flag standing on it.
@@ -1117,22 +1392,132 @@
     ctx.fillStyle = "#0f3460";
     ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
 
-    // The alien, drawn near the top (small, to leave room for buttons).
-    drawPixelSprite(SPRITE_COILED, SPRITE_COLORS, canvas.width / 2 - 28, 106, 56, 84);
+    // A small alien tucked in the top-left corner.
+    drawPixelSprite(SPRITE_COILED, SPRITE_COLORS, 26, 20, 38, 57);
 
     // The title, with a little dark shadow behind it so it pops.
     ctx.textAlign = "center";
-    ctx.font = "bold 52px sans-serif";
+    ctx.font = "bold 42px sans-serif";
     ctx.fillStyle = "#16213e";
-    ctx.fillText("SPRING ALIEN", canvas.width / 2 + 3, 88);
+    ctx.fillText("SPRING ALIEN", canvas.width / 2 + 2, 52);
     ctx.fillStyle = "#ffd700";
-    ctx.fillText("SPRING ALIEN", canvas.width / 2, 85);
+    ctx.fillText("SPRING ALIEN", canvas.width / 2, 50);
 
-    // Three ways to play, plus a button to wipe all the best times.
+    // Show whose name the scores will be saved under.
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillStyle = "#16213e";
+    ctx.fillText("Player: " + (playerName || "-----"), canvas.width / 2, 80);
+
+    // The buttons run down the left side.
     drawButton(START_BTN, "Start", "#e94560");
     drawButton(HARDCORE_BTN, "Hardcore", "#7a1f2b");
     drawButton(SUPER_BTN, "Super Hardcore", "#4a0e1a");
-    drawButton(RESET_SCORE_BTN, "Reset High Score", "#2a6f97");
+    drawButton(CHANGE_NAME_BTN, "Change Name", "#2a9d8f");
+    drawButton(RESET_SCORE_BTN, "Reset Scores", "#2a6f97");
+
+    // The leaderboard fills the right side.
+    drawLeaderboard();
+  }
+
+  // Draws the leaderboard panel: the top 3 fastest times for each mode,
+  // each tagged with the player's name (fastest time is best!). The position
+  // is passed in so it can sit on the right of the home screen OR be centered
+  // on the win screen.
+  function drawLeaderboard(px = 312, py = 100, pw = 462, ph = 306) {
+    // Panel background with a gold outline.
+    ctx.fillStyle = "rgba(15, 52, 96, 0.88)";
+    ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = "#ffd700";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(px, py, pw, ph);
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 22px sans-serif";
+    ctx.fillStyle = "#ffd700";
+    ctx.fillText("LEADERBOARD", px + pw / 2, py + 24);
+
+    // A little note: is this the shared online board, or just this computer?
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = firebaseReady ? "#8ee4d8" : "#c9c9c9";
+    ctx.fillText(firebaseReady ? "🌍 Shared online" : "💾 On this computer only",
+      px + pw / 2, py + 42);
+
+    let y = py + 66;
+    for (const m of MODES) {
+      // Mode heading (NORMAL / HARDCORE / SUPER HARDCORE).
+      ctx.textAlign = "left";
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillStyle = "#8ee4d8";
+      ctx.fillText(MODE_TITLES[m], px + 16, y);
+      y += 20;
+
+      // Three rows: rank + name on the left, time on the right. Empty slots
+      // show dashes so you can see how many spots are still up for grabs.
+      const list = leaderboard[m];
+      ctx.font = "15px monospace";
+      ctx.fillStyle = "#ffffff";
+      for (let i = 0; i < 3; i++) {
+        const entry = list[i];
+        const nm = entry ? entry.name : "-----";
+        const tm = entry ? (entry.cheat ? "99:99" : formatTime(entry.ms)) : "--:--";
+        ctx.textAlign = "left";
+        ctx.fillText((i + 1) + ". " + nm, px + 28, y);
+        ctx.textAlign = "right";
+        ctx.fillText(tm, px + pw - 20, y);
+        y += 18;
+      }
+      y += 8; // little gap before the next mode
+    }
+    ctx.textAlign = "left"; // reset so other text isn't affected
+  }
+
+  // Draws the "type your 5-letter name" screen.
+  function drawNameEntry() {
+    ctx.fillStyle = "#87ceeb";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0f3460";
+    ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+
+    drawPixelSprite(SPRITE_COILED, SPRITE_COLORS, canvas.width / 2 - 24, 44, 48, 72);
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 40px sans-serif";
+    ctx.fillStyle = "#ffd700";
+    ctx.fillText("ENTER YOUR NAME", canvas.width / 2, 168);
+
+    ctx.font = "20px sans-serif";
+    ctx.fillStyle = "#16213e";
+    ctx.fillText("Type 5 letters or numbers, then press Enter", canvas.width / 2, 200);
+
+    // Five letter boxes. The next box to fill glows gold.
+    const boxW = 60, gap = 16;
+    const total = 5 * boxW + 4 * gap;
+    let bx = canvas.width / 2 - total / 2;
+    const by = 232, bh = 70;
+    for (let i = 0; i < 5; i++) {
+      const filled = i < nameInput.length;
+      const active = i === nameInput.length; // the box you're about to type in
+      ctx.fillStyle = filled ? "#e94560" : "#ffffff";
+      ctx.fillRect(bx, by, boxW, bh);
+      ctx.strokeStyle = active ? "#ffd700" : "#16213e";
+      ctx.lineWidth = active ? 5 : 3;
+      ctx.strokeRect(bx, by, boxW, bh);
+      if (filled) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 44px sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.fillText(nameInput[i], bx + boxW / 2, by + bh / 2 + 2);
+        ctx.textBaseline = "alphabetic";
+      }
+      bx += boxW + gap;
+    }
+
+    // Once all five are typed, tell them how to start.
+    if (nameInput.length === 5) {
+      ctx.fillStyle = "#16213e";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillText("Press Enter to continue!", canvas.width / 2, 350);
+    }
   }
 
   // Draws a labeled button rectangle (bg color) with a white outline.
@@ -1172,6 +1557,7 @@
   function restartTimer() {
     elapsedMs = 0;
     timerRunning = false;
+    cheatTime = false; // a fresh game clears the cheat time
   }
   // Read/write the best time from the browser's storage. Wrapped in
   // try/catch because some browsers block storage when opened as a file.
@@ -1191,21 +1577,96 @@
     }
   }
 
+  // ---- Player name storage ----
+  function loadPlayerName() {
+    try { return localStorage.getItem("playerName_v1"); } catch (e) { return null; }
+  }
+  function savePlayerName(n) {
+    playerName = n;
+    try { localStorage.setItem("playerName_v1", n); } catch (e) { /* not saved */ }
+  }
+
+  // ---- Leaderboard storage ----
+  // Read the saved leaderboard, or start with three empty lists if there
+  // isn't one yet (or the browser blocks storage).
+  function loadLeaderboard() {
+    const empty = { normal: [], hard: [], superhard: [] };
+    try {
+      const raw = localStorage.getItem("leaderboard_v1");
+      if (!raw) return empty;
+      const data = JSON.parse(raw);
+      for (const m of MODES) if (!Array.isArray(data[m])) data[m] = [];
+      return data;
+    } catch (e) {
+      return empty;
+    }
+  }
+  function saveLeaderboard() {
+    try {
+      localStorage.setItem("leaderboard_v1", JSON.stringify(leaderboard));
+    } catch (e) { /* not saved */ }
+  }
+  // Add a finish time for the current player, then keep only the 3 fastest.
+  // `cheat` entries (from the warp code) show a silly 99:99 and sort last.
+  // If we're connected to the shared online board, send it there; the live
+  // listener will refresh the display. Otherwise just keep it locally.
+  function addScore(m, name, ms, cheat) {
+    const entry = { name: name, ms: Math.round(ms), cheat: !!cheat };
+    if (firebaseReady && firebaseDB) {
+      entry.ts = Date.now();
+      firebaseDB.ref("leaderboard/" + m).push(entry);
+    } else {
+      leaderboard[m].push(entry);
+      leaderboard[m].sort((a, b) => a.ms - b.ms); // fastest time first
+      leaderboard[m] = leaderboard[m].slice(0, 3); // keep only the top 3
+      saveLeaderboard();
+    }
+  }
+
+  // ---- Shared online leaderboard (Firebase) ----
+  // True only once a real config has been pasted in up top (not the PASTE_… placeholder).
+  function isFirebaseConfigured() {
+    return typeof firebaseConfig === "object" && firebaseConfig &&
+      typeof firebaseConfig.apiKey === "string" &&
+      !firebaseConfig.apiKey.startsWith("PASTE_");
+  }
+  // Connect to Firebase and start listening for live score updates.
+  function initFirebase() {
+    if (!isFirebaseConfigured() || typeof firebase === "undefined") return;
+    try {
+      firebase.initializeApp(firebaseConfig);
+      firebaseDB = firebase.database();
+      firebaseReady = true;
+      // Whenever the shared scores change, pull the 3 fastest for each mode
+      // and drop them into `leaderboard` so the panel redraws with them.
+      for (const m of MODES) {
+        firebaseDB.ref("leaderboard/" + m)
+          .orderByChild("ms")
+          .limitToFirst(3)
+          .on("value", (snap) => {
+            const list = [];
+            snap.forEach((child) => { list.push(child.val()); });
+            leaderboard[m] = list;
+          });
+      }
+    } catch (e) {
+      firebaseReady = false; // something went wrong — fall back to local scores
+    }
+  }
+
   // Update the on-screen timer text each frame. While running (and not yet
   // won), we recompute the elapsed time; otherwise it stays frozen.
   function updateTimer() {
+    // Used a level-warp cheat? Just show a silly 99:99 and don't record a best.
+    if (cheatTime) {
+      timerEl.textContent = "Time: 99:99";
+      return;
+    }
     if (timerRunning && !gameWon) {
       elapsedMs = performance.now() - startTime;
     }
     timerEl.textContent = "Time: " + formatTime(elapsedMs);
-
-    // The frame we FIRST win, check for a new best time (only if the timer
-    // was actually running). Each mode keeps its own separate record.
-    if (gameWon && !prevGameWon && timerRunning) {
-      const best = currentBest();
-      if (best === null || elapsedMs < best) setCurrentBest(elapsedMs);
-    }
-    prevGameWon = gameWon;
+    // (The win/best-time/leaderboard recording now happens in completeLevel.)
 
     // Show the best time for whichever mode we're in, clearly labeled.
     const labels = {
@@ -1230,9 +1691,17 @@
   }
   // Wipe every mode's best time (memory + saved storage) back to "--".
   function resetHighScores() {
+    // If we're on the shared board, wiping it clears scores for EVERYONE,
+    // so ask first (the kid can't nuke it by accident).
+    if (firebaseReady && firebaseDB) {
+      if (!window.confirm("Clear the shared leaderboard for EVERYONE?")) return;
+      firebaseDB.ref("leaderboard").remove();
+    }
     bestNormalMs = null;
     bestHardMs = null;
     bestSuperMs = null;
+    leaderboard = { normal: [], hard: [], superhard: [] }; // wipe the local copy too
+    saveLeaderboard();
     try {
       localStorage.removeItem("bestTimeMs_v2");
       localStorage.removeItem("bestTimeHardMs_v2");
